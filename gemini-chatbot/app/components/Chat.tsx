@@ -72,7 +72,7 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       <div className="flex-1 overflow-auto p-4 space-y-4">
         {messages.map((message, index) => (
           <div
