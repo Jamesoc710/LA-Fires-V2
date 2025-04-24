@@ -1,6 +1,6 @@
-# LA Fire Safety Assistant
+# LA Building Codes Assistant
 
-A Next.js application that uses Google's Gemini AI to provide information about Los Angeles fires and fire safety. The application maintains context from a knowledge base and provides a conversational interface for users to ask questions.
+A Next.js application that uses Google's Gemini AI to provide information about Los Angeles Title 26 building codes. The application maintains context from a knowledge base and provides a conversational interface for users to ask questions.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ A Next.js application that uses Google's Gemini AI to provide information about 
 
 ## Project Overview
 
-This application creates a chatbot interface that leverages Google's Gemini AI to provide information about Los Angeles fires and fire safety. The chatbot is context-aware, using a knowledge base of information to answer questions accurately. Users can interact with the chatbot through a modern, responsive interface.
+This application creates a chatbot interface that leverages Google's Gemini AI to provide information about Los Angeles Title 26 building codes. The chatbot is context-aware, using a knowledge base of information to answer questions accurately. Users can interact with the chatbot through a modern, responsive interface.
 
 ## Technology Stack
 
@@ -85,7 +85,7 @@ export default function Home() {
   return (
     <main className="flex min-h-screen flex-col">
       <header className="bg-blue-600 text-white p-4 shadow-md">
-        <h1 className="text-xl font-bold">LA Fire Safety Assistant</h1>
+        <h1 className="text-xl font-bold">LA Building Codes Assistant</h1>
         <p className="text-sm">Powered by Google Gemini</p>
       </header>
       
