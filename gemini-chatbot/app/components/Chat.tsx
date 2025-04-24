@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Message } from '../types/chat';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([
@@ -82,10 +84,10 @@ export default function Chat() {
             }`}
           >
             <div
-              className={`max-w-[70%] rounded-lg p-3 ${
+              className={`max-w-[70%] rounded-xl p-4 shadow-md ${
                 message.role === 'user'
                   ? 'bg-blue-500 text-white'
-                  : 'bg-gray-200 text-gray-800'
+                  : 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600'
               }`}
             >
               {message.content}
