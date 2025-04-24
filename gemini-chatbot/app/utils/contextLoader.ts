@@ -3,7 +3,7 @@ import path from 'path';
 
 export async function loadContext(): Promise<string> {
   try {
-    const contextPath = path.join(process.cwd(), 'context', 'knowledge_base.txt');
+    const contextPath = path.join(process.cwd(), 'context', 'municode_title_26.txt');
     const contextData = fs.readFileSync(contextPath, 'utf8');
     return contextData;
   } catch (error) {

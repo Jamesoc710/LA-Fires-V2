@@ -7,7 +7,7 @@ export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'assistant',
-      content: "Hello! I'm an AI assistant powered by Google Gemini. I can provide information about Los Angeles fires and fire safety. How can I help you today?"
+      content: "Hi there! I'm here to help you navigate Los Angeles Title 26 building codes. What part of your project can I assist with today?"
     }
   ]);
   const [input, setInput] = useState('');
