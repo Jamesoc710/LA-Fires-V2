@@ -49,7 +49,8 @@ gemini-chatbot/
 │   ├── layout.tsx            # Root layout component
 │   └── page.tsx              # Main page component
 ├── context/                  # Context files
-│   └── knowledge_base.txt    # LA Fire information
+│   ├── municode_title_26.txt # Municode Building Code Information                       
+│   └── knowledge_base.txt    # LA Fire saftey information (placeholder)
 ├── node_modules/             # Dependencies
 ├── public/                   # Static assets
 ├── next.config.ts            # Next.js configuration
@@ -86,7 +87,7 @@ export default function Home() {
     <main className="flex min-h-screen flex-col">
       <header className="bg-blue-600 text-white p-4 shadow-md">
         <h1 className="text-xl font-bold">LA Building Codes Assistant</h1>
-        <p className="text-sm">Powered by Google Gemini</p>
+        <p className="text-sm">Powered by IF Lab</p>
       </header>
       
       <div className="flex-1">
