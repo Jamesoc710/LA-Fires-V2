@@ -26,14 +26,14 @@ const features = [
 
 export default function LandingPage() {
   return (
-    <main className="min-h-screen bg-white dark:bg-gray-900 text-black dark:text-white py-24 sm:py-32 flex items-center justify-center">
+    <main className="min-h-screen overflow-x-hidden bg-white dark:bg-gray-900 text-black dark:text-white py-24 sm:py-32 flex items-center justify-center">
       <div className="mx-auto max-w-7xl px-6 lg:px-8">
         <div className="mx-auto grid max-w-2xl grid-cols-1 gap-x-8 gap-y-16 sm:gap-y-20 lg:mx-0 lg:max-w-none lg:grid-cols-2">
           
           {/* Text column */}
           <div className="lg:pt-4 lg:pr-8">
             <div className="lg:max-w-lg space-y-6">
-              <h1 className="text-5xl font-bold text-indigo-600">BuildAssist</h1>
+              <h1 className="text-5xl font-bold text-indigo-600">LA Fires Project</h1>
               <p className="text-lg text-gray-600 dark:text-gray-300">
                 Your AI-powered guide to LA building codes.
               </p>
