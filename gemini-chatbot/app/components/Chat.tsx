@@ -90,7 +90,9 @@ export default function Chat() {
                   : 'bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600'
               }`}
             >
-              {message.content}
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {message.content}
+              </ReactMarkdown>
             </div>
           </div>
         ))}
