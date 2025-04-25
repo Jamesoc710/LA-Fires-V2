@@ -75,7 +75,10 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex-1 overflow-auto p-4 space-y-4 pb-16">
+      <div
+        className="flex-1 overflow-auto p-4 space-y-4 pb-16"
+        style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
+      >
         {messages.map((message, index) => (
           <div
             key={index}
@@ -117,7 +120,11 @@ export default function Chat() {
         <div ref={messagesEndRef} />
       </div>
       
-      <form onSubmit={handleSubmit} className="border-t p-4 sticky bottom-0 bg-white dark:bg-slate-900 z-10">
+      <form
+        onSubmit={handleSubmit}
+        className="border-t p-4 sticky bg-white dark:bg-slate-900 z-10"
+        style={{ bottom: 'env(safe-area-inset-bottom)' }}
+      >
         <div className="flex space-x-2">
           <input
             type="text"
