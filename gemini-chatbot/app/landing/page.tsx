@@ -7,19 +7,19 @@ const features = [
   {
     name: 'Answers when you need them',
     description:
-      'With 24/7 availability',
+      'Instant help, any time, day or night',
     icon: CalendarDaysIcon,
   },
   {
     name: 'Build Faster',
     description:
-      'Speeds up project timelines by 34%',
+      'Accelerate project timelines',
     icon: ClockIcon,
   },
   {
     name: 'Spend Less',
     description:
-      'Reduces costly non-compliance corrections',
+      'Reduce costly non-compliance corrections',
     icon: CreditCardIcon,
   },
 ]
@@ -48,12 +48,12 @@ export default function LandingPage() {
               </p>
               <dl className="mt-4 space-y-4 text-base text-gray-600 dark:text-gray-400">
                 {features.map((feature) => (
-                  <div key={feature.name} className="relative pl-9">
-                    <dt className="inline font-semibold text-gray-900 dark:text-white">
+                  <div key={feature.name} className="relative pl-9 flex flex-col">
+                    <dt className="font-semibold text-gray-900 dark:text-white block">
                       <feature.icon className="absolute top-1 left-0 h-5 w-5 text-indigo-600" aria-hidden="true" />
                       {feature.name}
-                    </dt>{' '}
-                    <dd className="inline">{feature.description}</dd>
+                    </dt>
+                    <dd className="mt-1 text-base text-gray-600 dark:text-gray-400">{feature.description}</dd>
                   </div>
                 ))}
               </dl>
