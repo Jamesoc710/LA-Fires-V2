@@ -59,6 +59,7 @@ export default function Chat() {
       }
       
       const data = await response.json();
+      console.log('Detected intent from API:', data.intent);
       
       // Add response to chat
       setMessages(prev => [

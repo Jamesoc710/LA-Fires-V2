@@ -22,18 +22,33 @@ export async function POST(request: NextRequest) {
     
     // Format the context and conversation history for Gemini
     const formattedContent = formatMessagesForGemini(messages, contextData);
-    
-    // Get the Gemini model
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-    
-    // Generate a response from Gemini
-    const result = await model.generateContent({
-      contents: formattedContent
-    });
-    const response = result.response;
-    const text = response.text();
-    
-    return NextResponse.json({ response: text });
+
+    // Step 1: Determine intent of the user's query using Flash Lite model
+    const intentModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+    const intentPrompt = [
+      {
+        role: 'user',
+        parts: [{ text: messages[messages.length - 1].content }]
+      }
+    ];
+    const intentResult = await intentModel.generateContent({ contents: intentPrompt });
+    const intent = intentResult.response.text().trim();
+
+    // Step 2: Generate response using intent and context
+    const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const combinedPrompt = [
+      { role: 'user', parts: [{ text: `Intent: ${intent}` }] },
+      { role: 'user', parts: [{ text: `You are a helpful assistant that provides information about Los Angeles fires and fire safety.\nPlease use the following context to inform your responses:\n\n${contextData}` }] },
+      // include the original conversation history
+      ...messages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'model',
+        parts: [{ text: msg.content }]
+      }))
+    ];
+    const responseResult = await responseModel.generateContent({ contents: combinedPrompt });
+    const text = responseResult.response.text().trim();
+
+    return NextResponse.json({ response: text, intent });
   } catch (error: any) {
     console.error('Error in chat API:', error);
     return NextResponse.json(
@@ -80,4 +95,4 @@ Only use the information in the context to answer questions. If you don't know t
   });
   
   return formattedContent;
-} 
+}
