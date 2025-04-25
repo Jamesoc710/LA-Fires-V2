@@ -132,7 +132,6 @@ export default function Chat() {
             onChange={(e) => setInput(e.target.value)}
             placeholder="Type your message..."
             className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={isLoading}
           />
           <button
             type="submit"
