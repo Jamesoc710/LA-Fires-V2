@@ -27,42 +27,20 @@ export async function POST(request: NextRequest) {
     const customLiteSystemPrompt = {
       role: 'user',
       parts: [{
-        text: `You are tasked with identifying the user's intent based on their query about Los Angeles building codes.
+        text: `You are tasked with refining the user's inputted question about Los Angeles building codes.
     
-    You must select the most relevant sections from the list below:
-    
-    - APPENDIX A — Legislative History for Ordinance 2225
-    - APPENDIX H — Signs
-    - APPENDIX J — Grading
-    - APPENDIX P — Emergency Housing
-    - CHAPTER 1 — Administration
-    - CHAPTER 2 — Definitions
-    - CHAPTER 7A [SFM] — Materials and Construction Methods for Exterior Wildfire Exposure
-    - CHAPTER 10 — Means of Egress
-    - CHAPTER 15 — Roof Assemblies and Rooftop Structures
-    - CHAPTER 16 — Structural Design
-    - CHAPTER 17 — Special Inspections and Tests
-    - CHAPTER 18 — Soils and Foundations
-    - CHAPTER 19 — Concrete
-    - CHAPTER 23 — Wood
-    - CHAPTER 31 — Special Construction
-    - CHAPTER 66 — Special Safety Provisions
-    - CHAPTER 67 — Security Provisions
-    - CHAPTER 68 — Expedited Permitting for Small Residential Rooftop Solar Energy Systems
-    - CHAPTER 69 — Trailer Coaches
-    - CHAPTER 94 — Repair of Welded Steel Moment Frame Buildings in High Earthquake Damage Areas
-    - CHAPTER 95 — Earthquake Hazard Reduction for Existing Concrete Tilt-Up Buildings
-    - CHAPTER 96 — Earthquake Hazard Reduction for Existing Unreinforced Masonry Bearing Wall Buildings
-    - CHAPTER 98 — Unoccupied Buildings, Structures, and Special Hazards
-    - CHAPTER 99 — Building and Property Rehabilitation
-    
-    Respond in the following format:
-    "Answer the prompt: {user's prompt}, the following sections are most likely to be relevant: {relevant topics}."
+    Your goal is to:
+    - Make the question as clear, specific, and precise as possible.
+    - Keep the original intent and meaning.
+    - Eliminate vague or ambiguous wording.
+    - If necessary, add brief clarifications to make it easier for a code reviewer to understand the request.
     
     Important:
-    - Be concise.
-    - Select only the sections that are directly relevant based on the query.
-    - If unsure, choose the best matching section(s) without guessing unrelated topics.`
+    - Do not change the meaning of the user's original question.
+    - Do not answer the question.
+    - Only return the refined and clarified version of the question.
+    
+    Respond with only the improved question, nothing else.`
       }]
     };
     // Step 1: Determine intent of the user's query using Flash Lite model
@@ -82,15 +60,22 @@ export async function POST(request: NextRequest) {
 
 
     // Custom system prompt for Gemini Flash
-    const customSystemPrompt = {
-      role: 'user',
-      parts: [{ text: `You must always include the specific section title or source heading where you found the information, formatted in bold markdown. 
-    Example: "**Section: H103.1**".
-    
-    If no section is available, clearly state "**Section: Unknown**".
-    
-    This formatting is required for every answer.`}]
-    };
+const customSystemPrompt = {
+  role: 'user',
+  parts: [{
+    text: `You must always include the specific section title or source heading where you found the information, formatted in bold markdown. 
+Example: "**Section: H103.1**".
+
+If no section is available, clearly state "**Section: Unknown**".
+
+Important Instructions:
+- Get straight to the relevant information.
+- Do not include introductory remarks, summaries, disclaimers, or recommendations.
+- Only present the answer based directly on the context provided.
+- Write in a direct, professional tone focused solely on delivering the requested information.
+`
+  }]
+};
 
     // Step 2: Generate response using intent and context
     const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
