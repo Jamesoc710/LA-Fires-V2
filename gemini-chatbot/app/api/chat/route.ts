@@ -1,10 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { loadAllContextFiles } from '../../utils/contextLoader';
+import { lookupZoning, lookupAssessor } from "@/lib/la/fetchers";
+
+export const runtime = 'nodejs';
 
 // Initialize the Google Generative AI with your API key
 // You'll need to add your API key to .env.local file
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+function wantsParcelLookup(s: string) {
+  const q = s.toLowerCase();
+  return (
+    q.includes("apn") ||
+    q.includes("zoning") ||
+    q.includes("overlay") ||
+    q.includes("assessor") ||
+    q.includes("parcel") ||
+    q.includes("what is my") // common phrasing
+  );
+}
+
+function extractApn(s: string): string | undefined {
+  const m = s.match(/\b(\d{4}-?\d{3}-?\d{3})\b/); // e.g., 5843-004-015 or 5843004015
+  return m ? m[1] : undefined;
+}
+
+function extractAddress(s: string): string | undefined {
+  // super-light heuristic; you can improve later or let the user provide it explicitly
+  if (/\d{3,5}\s+\w+/.test(s)) return s.trim();
+  return undefined;
+}
+
 
 export async function POST(request: NextRequest) {
   try {
@@ -57,6 +84,29 @@ export async function POST(request: NextRequest) {
 
 //----------------END OF LITE MODEL HANDLING-------------------------------------------------
 //-------------------------------------------------------------------------------------------
+// ----- OPTIONAL LIVE LOOKUP PRE-STEP -----
+let toolContext = "";
+try {
+  const lastUser = messages[messages.length - 1]?.content || "";
+  if (wantsParcelLookup(lastUser)) {
+    const apn = extractApn(lastUser);
+    const address = extractAddress(lastUser);
+
+    // First try zoning (address or APN)
+    const zoning = await lookupZoning({ address, apn });
+    toolContext += `\n\n[TOOL:zoning_lookup]\n${JSON.stringify(zoning, null, 2)}`;
+
+    // If we have an APN (from user or zoning result), add assessor details too
+    const finalApn = apn || zoning.apn;
+    if (finalApn) {
+      const assessor = await lookupAssessor({ apn: finalApn });
+      toolContext += `\n\n[TOOL:assessor_lookup]\n${JSON.stringify(assessor, null, 2)}`;
+    }
+  }
+} catch (e) {
+  toolContext += `\n\n[TOOL_ERROR] ${String(e)}`;
+}
+// ----- END LIVE LOOKUP PRE-STEP -----
 
 
     // Custom system prompt for Gemini Flash
@@ -77,20 +127,39 @@ Important Instructions:
   }]
 };
 
-    // Step 2: Generate response using intent and context
-    const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    const combinedPrompt = [
-      customSystemPrompt,
-      { role: 'user', parts: [{ text: `Intent: ${intent}` }] },
-      { role: 'user', parts: [{ text: `You are a helpful assistant that provides information about Los Angeles fires and fire safety.\nPlease use the following context to inform your responses:\n\n${contextData}` }] },
-      // include the original conversation history
-      ...messages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-      }))
-    ];
-    const responseResult = await responseModel.generateContent({ contents: combinedPrompt });
-    const text = responseResult.response.text().trim();
+// Step 2: Generate response using intent and context
+const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+const combinedPrompt = [
+  customSystemPrompt,
+  { role: 'user', parts: [{ text: `Intent: ${intent}` }] },
+
+  // ✅ include static context + tool outputs
+  {
+    role: 'user',
+    parts: [{
+      text: `You are a helpful assistant that provides information about Los Angeles fires and fire safety.
+Please use the following context AND tool outputs (if any) to inform your responses:
+
+=== STATIC CONTEXT ===
+${contextData}
+
+=== TOOL OUTPUTS ===
+${toolContext || "(none)"}
+` // <-- close the backtick here
+    }]
+  },
+
+  // include the original conversation history
+  ...messages.map(msg => ({
+    role: msg.role === 'user' ? 'user' : 'model',
+    parts: [{ text: msg.content }]
+  })),
+];
+
+const responseResult = await responseModel.generateContent({ contents: combinedPrompt });
+const text = responseResult.response.text().trim();
+
 
     return NextResponse.json({ response: text, intent });
   } catch (error: any) {
