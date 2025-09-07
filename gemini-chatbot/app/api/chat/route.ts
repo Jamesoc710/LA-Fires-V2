@@ -95,16 +95,20 @@ try {
     const zoning = await lookupZoning({ address, apn });
     toolContext += `\n\n[TOOL:zoning_lookup]\n${JSON.stringify(zoning, null, 2)}`;
 
-    // If we have an APN (from user or zoning result), add assessor details too
+    console.log("DEBUG zoning result:", zoning); // 👈 debug log
+
+    // If we have an APN, add assessor details
     const finalApn = apn || zoning.apn;
     if (finalApn) {
       const assessor = await lookupAssessor({ apn: finalApn });
       toolContext += `\n\n[TOOL:assessor_lookup]\n${JSON.stringify(assessor, null, 2)}`;
+      console.log("DEBUG assessor result:", assessor); // 👈 debug log
     }
   }
 } catch (e) {
   toolContext += `\n\n[TOOL_ERROR] ${String(e)}`;
 }
+
 // ----- END LIVE LOOKUP PRE-STEP -----
 
 
