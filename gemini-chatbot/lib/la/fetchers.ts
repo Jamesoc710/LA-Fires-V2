@@ -1,159 +1,202 @@
-import { ENDPOINTS, endpointsConfigured, assessorParcelUrl } from "./endpoints";
-import type { ZoningResult, AssessorResult } from "./types";
+// lib/la/fetchers.ts
+import { endpoints } from "./endpoints";
 
-/** Abortable fetch with a short timeout so we don't hang the request. */
-async function fetchJSON(url: string, init?: RequestInit, timeoutMs = 8000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort("timeout"), timeoutMs);
+/* -------------------------- helpers: http + utils -------------------------- */
+
+const ARCGIS_TIMEOUT_MS = 8000;
+const ARCGIS_RETRIES = 2;
+
+async function esriQuery(url: string, params: Record<string, string>) {
+  const qs = new URLSearchParams({ f: "json", ...params }).toString();
+  const full = `${url}?${qs}`;
+
+  for (let attempt = 0; attempt <= ARCGIS_RETRIES; attempt++) {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), ARCGIS_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(full, { method: "GET", cache: "no-store", signal: ctrl.signal as any });
+      clearTimeout(to);
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`ArcGIS ${res.status} ${res.statusText} :: ${body?.slice(0, 200)}`);
+      }
+      const json = await res.json();
+      // ArcGIS error payloads still return 200 sometimes:
+      if ((json as any)?.error) {
+        throw new Error(`ArcGIS error :: ${JSON.stringify((json as any).error).slice(0, 200)}`);
+      }
+      return json;
+    } catch (err) {
+      clearTimeout(to);
+      if (attempt === ARCGIS_RETRIES) throw err;
+      // small jitter before retry
+      await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
+    }
+  }
+  // unreachable
+  throw new Error("esriQuery: exhausted retries");
+}
+
+function digitsOnly(id: string) {
+  return id.replace(/\D/g, "");
+}
+
+function pickLargestFeatureByArea(features: any[] | undefined) {
+  if (!features?.length) return undefined;
+  // area in WebMercator (outSR=102100) -> approximate by ring bbox area
+  let best = features[0];
+  let bestArea = areaOfGeom(features[0]?.geometry);
+  for (let i = 1; i < features.length; i++) {
+    const a = areaOfGeom(features[i]?.geometry);
+    if ((a ?? 0) > (bestArea ?? 0)) {
+      best = features[i]; bestArea = a;
+    }
+  }
+  return best;
+}
+
+function areaOfGeom(geom: any): number | null {
+  if (!geom) return null;
   try {
-    const res = await fetch(url, { signal: ctrl.signal, ...init, headers: {
-      ...(init?.headers || {}),
-      "accept": "application/json"
-    }});
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} :: ${url} :: ${text?.slice(0, 250)}`);
+    // polygon rings: [[x,y], ...]
+    const rings = geom.rings?.[0];
+    if (!Array.isArray(rings) || rings.length < 3) return null;
+    // rough bbox area
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of rings) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
     }
-    return await res.json();
-  } finally {
-    clearTimeout(t);
-  }
+    return (maxX - minX) * (maxY - minY);
+  } catch { return null; }
 }
 
-/** Build an ArcGIS "query" URL with common params. */
-function buildArcgisQueryURL(base: string, params: Record<string, string>) {
-  const u = new URL(base);
-  const defaults: Record<string, string> = {
-    f: "json",
-    outFields: "*",
-    returnGeometry: "false",
-  };
-  const all = { ...defaults, ...params };
-  for (const [k, v] of Object.entries(all)) u.searchParams.set(k, v);
-  return u.toString();
-}
+/* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
 
-/** Normalize APN to the portal-friendly numeric form. */
-function normalizeApn(apn?: string) {
-  return apn?.replace(/[^0-9]/g, "");
-}
+export async function getParcelByAINorAPN(id: string) {
+  const digits = digitsOnly(id);
+  const where = [
+    `REPLACE(UPPER(AIN),'-','')='${digits}'`,
+    `REPLACE(UPPER(APN),'-','')='${digits}'`,
+  ].join(" OR ");
 
-/** Escape single quotes for simple ArcGIS WHERE filters. */
-function escapeWhereLiteral(s: string) {
-  return s.replace(/'/g, "''");
-}
-
-/**
- * Lookup zoning + overlays + helpful links.
- * Input can be address OR apn (OR lat/lng if you later wire a reverse-geocoder).
- */
-export async function lookupZoning(input: {
-  address?: string;
-  apn?: string;
-  lat?: number;
-  lng?: number;
-}): Promise<ZoningResult> {
-  const result: ZoningResult = {
-    input,
-    jurisdiction: "Unknown",
-    overlays: [],
-    links: {
-      znet: ENDPOINTS.ZNET_VIEWER,
-      gisnet: ENDPOINTS.GISNET_VIEWER,
-      title22: ENDPOINTS.TITLE_22,
-    },
-  };
-
-  // If endpoints are placeholders, return links only (prevents crashes in Preview).
-  if (!endpointsConfigured()) return result;
-
-  // 1) Address → APN via Z-NET (optional step if APN isn’t provided)
-  if (input.address && !input.apn) {
-    const addr = input.address.trim();
-    if (addr.length > 0) {
-      // NOTE: Replace "Address" with the real field name in your Z-NET search layer.
-      const where = `UPPER(Address) LIKE UPPER('%${escapeWhereLiteral(addr)}%')`;
-      const url = buildArcgisQueryURL(ENDPOINTS.ZNET_ADDRESS_SEARCH, {
-        where,
-        outFields: "*",
-        returnGeometry: "false",
-      });
-      const data = await fetchJSON(url);
-      const f = data?.features?.[0]?.attributes ?? {};
-      result.apn = f.APN || f.Parcel || result.apn;
-      result.community = f.Community || f.City || result.community;
-      result.planningArea = f.PlanningArea || result.planningArea;
-    }
-  }
-
-  // 2) APN → zoning/overlays via GIS-NET
-  const apn = input.apn || result.apn;
-  if (apn) {
-    // NOTE: Replace "APN", "ZONE", "CSD", "HILLSIDE" with your parcel layer’s real field names.
-    const where = `APN='${escapeWhereLiteral(apn)}'`;
-    const url = buildArcgisQueryURL(ENDPOINTS.GISNET_PARCEL_QUERY, {
-      where,
-      outFields: "*",
-      returnGeometry: "true",
-    });
-
-    const data = await fetchJSON(url);
-    const g = data?.features?.[0]?.attributes ?? {};
-
-    result.zoning = g.ZONE || g.Zoning || result.zoning;
-
-    const overlays: string[] = [];
-    if (g.CSD) overlays.push(`CSD: ${g.CSD}`);
-    if (g.HILLSIDE) overlays.push("Hillside");
-    // Add more overlays here as your layer exposes them.
-    result.overlays = overlays;
-
-    // Helpful deep links users expect
-    result.links.assessor = assessorParcelUrl(normalizeApn(apn) || apn);
-    result.links.permits = "https://dpw.lacounty.gov/bsd/reports/"; // swap when you have a DRP permit-history URL
-  }
-
-  // TODO: add a jurisdiction check (unincorporated vs City) if/when you have a layer for that.
-
-  return result;
-}
-
-/** Lookup assessor details (situs/use/areas/yearBuilt) by APN (or later by address). */
-export async function lookupAssessor(input: {
-  address?: string;
-  apn?: string;
-}): Promise<AssessorResult> {
-  const out: AssessorResult = { input, links: {} };
-
-  if (!endpointsConfigured()) return out;
-
-  // You can add address→APN here by reusing the Z-NET search if needed.
-  const apn = input.apn;
-  if (!apn) return out;
-
-  // NOTE: Replace field names with the assessor layer’s actual schema.
-  const where = `APN='${escapeWhereLiteral(apn)}'`;
-  const url = buildArcgisQueryURL(ENDPOINTS.ASSESSOR_QUERY, {
+  const r = await esriQuery(endpoints.znetAddressSearch, {
+    returnGeometry: "true",
+    outSR: "102100",
     where,
-    outFields: "*",
-    returnGeometry: "false",
+    // keep lean; add more only if you show them in UI
+    outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
   });
 
-  const data = await fetchJSON(url);
-  const f = data?.features?.[0]?.attributes ?? {};
-
-  out.apn = apn;
-  out.situsAddress = f.SITUS || f.Address || undefined;
-  out.useCode = f.UseCode || f.LandUse || undefined;
-  out.landSqft = toNum(f.LotArea ?? f.LandSQFT);
-  out.livingAreaSqft = toNum(f.LivingArea ?? f.SqFt);
-  out.yearBuilt = toNum(f.YearBuilt ?? f.YrBuilt);
-  out.links.assessor = assessorParcelUrl(normalizeApn(apn) || apn);
-
-  return out;
+  // if multiple polygons (condos/complex), take the largest
+  const feat = pickLargestFeatureByArea(r.features);
+  return feat ?? null;
 }
 
-function toNum(v: unknown): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : undefined;
+/* ------------------------ ZONING (parcel geom → zone) ------------------------ */
+
+export async function lookupZoning(id: string) {
+  const parcel = await getParcelByAINorAPN(id);
+  if (!parcel?.geometry) {
+    return { zoning: null, details: null, links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer } };
+  }
+
+  const z = await esriQuery(endpoints.gisnetParcelQuery, {
+    returnGeometry: "false",
+    geometry: JSON.stringify(parcel.geometry),
+    geometryType: "esriGeometryPolygon",
+    inSR: "102100",
+    spatialRel: "esriSpatialRelIntersects",
+    // tailor to your confirmed fields on layer 4
+    outFields: "ZONE,Z_DESC,Z_CATEGORY,TITLE_22,PLNG_AREA",
+  });
+
+  const a = z.features?.[0]?.attributes ?? null;
+  return a
+    ? {
+        zoning: a.ZONE ?? null, // e.g., "R-1-10000"
+        details: {
+          description: a.Z_DESC ?? null,
+          category: a.Z_CATEGORY ?? null,
+          planningArea: a.PLNG_AREA ?? null,
+          title22: a.TITLE_22 ?? null,
+        },
+        links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
+      }
+    : { zoning: null, details: null, links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer } };
+}
+
+/* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
+
+export async function lookupAssessor(id: string) {
+  const digits = digitsOnly(id);
+
+  if (!endpoints.assessorParcelQuery) {
+    return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
+  }
+
+  const where = [
+    `REPLACE(UPPER(AIN),'-','')='${digits}'`,
+    `REPLACE(UPPER(APN),'-','')='${digits}'`,
+  ].join(" OR ");
+
+  const outFields = [
+    "AIN","APN","SitusAddress","SitusCity","SitusZIP",
+    "UseCode","UseType","UseDescription",
+    // multi-part improvements/main area + earliest year built
+    "YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4",
+    "EffectiveYear1","EffectiveYear2","EffectiveYear3","EffectiveYear4",
+    "SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4",
+    "Units1","Units2","Units3","Units4",
+    "Bedrooms1","Bathrooms1",
+    // lot size if present on this layer (sometimes missing)
+    "LotArea","LOT_AREA","LOT_SQFT"
+  ].join(",");
+
+  const r = await esriQuery(endpoints.assessorParcelQuery, {
+    returnGeometry: "false",
+    where,
+    outFields,
+  });
+
+  const a = r.features?.[0]?.attributes;
+  if (!a) {
+    return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
+  }
+
+  const livingArea =
+    ["SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4"]
+      .map(k => Number(a[k]) || 0)
+      .reduce((s, n) => s + n, 0) || null;
+
+  const yearBuiltVals = ["YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4"]
+    .map(k => parseInt(a[k], 10))
+    .filter(n => !Number.isNaN(n));
+  const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
+
+  const lotSqft =
+    Number(a.LotArea) || Number(a.LOT_AREA) || Number(a.LOT_SQFT) || null;
+
+  const units = ["Units1","Units2","Units3","Units4"].map(k => Number(a[k]) || 0)
+                  .reduce((s, n) => s + n, 0) || null;
+
+  return {
+    ain: a.AIN ?? null,
+    apn: a.APN ?? null,
+    situs: a.SitusAddress ?? null,
+    city: a.SitusCity ?? null,
+    zip: a.SitusZIP ?? null,
+    use: a.UseDescription || a.UseType || a.UseCode || null,
+    livingArea,
+    yearBuilt,
+    lotSqft,
+    units,
+    bedrooms: a.Bedrooms1 ?? null,
+    bathrooms: a.Bathrooms1 ?? null,
+    links: { assessor: endpoints.assessorViewerForAIN((a.AIN ?? digits).toString()) },
+  };
 }
