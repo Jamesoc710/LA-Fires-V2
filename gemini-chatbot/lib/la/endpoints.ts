@@ -2,16 +2,15 @@
 // Central registry for LA County endpoints + viewer links (env-driven).
 
 type EndpointMap = Readonly<{
-  // REST endpoints (ArcGIS /query)
-  ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
-  GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
-  ASSESSOR_PARCEL_QUERY: string;  // Assessor attrs (same parcel service is fine)
-
-  // Human-viewer links
+  ZNET_ADDRESS_SEARCH: string;
+  GISNET_PARCEL_QUERY: string;
+  ASSESSOR_PARCEL_QUERY: string;
+  ASSESSOR_QUERY: string;        // keep as alias so old code compiles
   ZNET_VIEWER: string;
   GISNET_VIEWER: string;
   TITLE_22: string;
 }>;
+
 
 const env = (k: string, fallback = "") => (process.env[k]?.trim() ?? fallback);
 
