@@ -1,32 +1,26 @@
-/**
- * Central registry for LA County endpoints + viewer links.
- * - Keep REST (machine) URLs separate from human-viewer URLs.
- * - Safe to import on server or client (strings only).
- * - Helpers included for common deep links.
- *
- * Fill the three REST placeholders when you’re ready.
- */
+// lib/la/endpoints.ts
+// Central registry for LA County endpoints + viewer links (env-driven).
 
 type EndpointMap = Readonly<{
-  // --- REST (machine) endpoints used by fetchers.ts ---
-  ZNET_ADDRESS_SEARCH: string;   // FeatureServer/MapServer "query" for address → APN
-  GISNET_PARCEL_QUERY: string;   // MapServer "query" for APN → zoning/overlays
-  ASSESSOR_QUERY: string;        // MapServer "query" for APN → assessor attrs
+  // REST endpoints (ArcGIS /query)
+  ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
+  GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
+  ASSESSOR_PARCEL_QUERY: string;  // Assessor attrs (same parcel service is fine)
 
-  // --- Human-friendly viewers (for clickable sources) ---
+  // Human-viewer links
   ZNET_VIEWER: string;
   GISNET_VIEWER: string;
   TITLE_22: string;
 }>;
 
-/** Default endpoints (replace <arcgis-host> when you wire real layers). */
-export const ENDPOINTS: EndpointMap = Object.freeze({
-  // REST (machine) endpoints
-  ZNET_ADDRESS_SEARCH: "https://<arcgis-host>/.../FeatureServer/0/query",
-  GISNET_PARCEL_QUERY: "https://<arcgis-host>/.../MapServer/0/query",
-  ASSESSOR_QUERY:      "https://<arcgis-host>/.../MapServer/0/query",
+const env = (k: string, fallback = "") => (process.env[k]?.trim() ?? fallback);
 
-  // Viewers / references
+// Read from env (set these in Vercel and, if you run locally, .env.local)
+export const ENDPOINTS: EndpointMap = Object.freeze({
+  ZNET_ADDRESS_SEARCH: env("ZNET_ADDRESS_SEARCH"),
+  GISNET_PARCEL_QUERY: env("GISNET_PARCEL_QUERY"),
+  ASSESSOR_PARCEL_QUERY: env("ASSESSOR_PARCEL_QUERY"),
+
   ZNET_VIEWER:
     "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
   GISNET_VIEWER: "https://planning.lacounty.gov/gisnet",
@@ -34,26 +28,28 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
     "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
 });
 
-/** Quick guard so fetchers can early-return if placeholders aren’t replaced yet. */
+// Back-compat convenience object used by fetchers.ts
+export const endpoints = {
+  znetAddressSearch: ENDPOINTS.ZNET_ADDRESS_SEARCH,
+  gisnetParcelQuery: ENDPOINTS.GISNET_PARCEL_QUERY,
+  assessorParcelQuery: ENDPOINTS.ASSESSOR_PARCEL_QUERY,
+
+  znetViewer: ENDPOINTS.ZNET_VIEWER,
+  gisnetViewer: ENDPOINTS.GISNET_VIEWER,
+  assessorViewerForAIN: (ain: string) =>
+    `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`,
+};
+
+// Only require parcel + zoning to run; assessor is optional.
 export function endpointsConfigured(): boolean {
-  return ![
-    ENDPOINTS.ZNET_ADDRESS_SEARCH,
-    ENDPOINTS.GISNET_PARCEL_QUERY,
-    ENDPOINTS.ASSESSOR_QUERY,
-  ].some((u) => u.includes("<arcgis-host>"));
+  return Boolean(endpoints.znetAddressSearch && endpoints.gisnetParcelQuery);
 }
 
-/** Build a viewer link to the Assessor portal for a given APN. */
+// Viewer helpers (unchanged)
 export function assessorParcelUrl(apn: string): string {
   const normalized = apn.replace(/[^0-9]/g, "");
   return `https://portal.assessor.lacounty.gov/parceldetail/${normalized}`;
 }
-
-/**
- * Optional viewer helpers (use if you want to deep-link):
- * - These return base viewers now; if you later know the query-string params used by Z-NET/GIS-NET,
- *   you can add them here without touching the rest of the app.
- */
 export function znetViewerUrl(_address?: string): string {
   return ENDPOINTS.ZNET_VIEWER;
 }
