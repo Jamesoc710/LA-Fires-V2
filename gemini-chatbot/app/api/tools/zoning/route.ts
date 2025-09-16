@@ -1,3 +1,4 @@
+import { assertCoreEndpoints } from "@/lib/la/endpoints";
 import { NextRequest, NextResponse } from "next/server";
 import { lookupZoning } from "@/lib/la/fetchers";
 
@@ -6,6 +7,8 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    assertCoreEndpoints();
+
     const body = await req.json().catch(() => ({}));
     const { address, apn, lat, lng } = body || {};
 
