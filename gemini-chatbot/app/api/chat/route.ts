@@ -87,22 +87,27 @@ export async function POST(request: NextRequest) {
 let toolContext = "";
 try {
   const lastUser = messages[messages.length - 1]?.content || "";
+
   if (wantsParcelLookup(lastUser)) {
     const apn = extractApn(lastUser);
     const address = extractAddress(lastUser);
 
-    // First try zoning (address or APN)
-    const zoning = await lookupZoning({ address, apn });
-    toolContext += `\n\n[TOOL:zoning_lookup]\n${JSON.stringify(zoning, null, 2)}`;
+    // For now, our fetchers only support AIN/APN, not address geocoding.
+    if (apn) {
+      // Zoning by APN/AIN
+      const zoning = await lookupZoning(apn);
+      toolContext += `\n\n[TOOL:zoning_lookup]\n${JSON.stringify(zoning, null, 2)}`;
+      console.log("DEBUG zoning result:", zoning);
 
-    console.log("DEBUG zoning result:", zoning); // 👈 debug log
-
-    // If we have an APN, add assessor details
-    const finalApn = apn || zoning.apn;
-    if (finalApn) {
-      const assessor = await lookupAssessor({ apn: finalApn });
+      // Assessor by APN/AIN
+      const assessor = await lookupAssessor(apn);
       toolContext += `\n\n[TOOL:assessor_lookup]\n${JSON.stringify(assessor, null, 2)}`;
-      console.log("DEBUG assessor result:", assessor); // 👈 debug log
+      console.log("DEBUG assessor result:", assessor);
+    } else if (address) {
+      toolContext += `\n\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+      console.log("DEBUG note: address present, APN missing");
+    } else {
+      toolContext += `\n\n[TOOL_NOTE] No APN/AIN or address detected.`;
     }
   }
 } catch (e) {
