@@ -51,3 +51,11 @@ export function znetViewerUrl(): string {
 export function gisnetViewerUrl(): string {
   return ENDPOINTS.GISNET_VIEWER;
 }
+export function assertCoreEndpoints() {
+  if (!endpoints.znetAddressSearch || !endpoints.gisnetParcelQuery) {
+    throw new Error(
+      "Missing required ArcGIS endpoints. Ensure ZNET_ADDRESS_SEARCH and GISNET_PARCEL_QUERY are set in this environment."
+    );
+  }
+}
+
