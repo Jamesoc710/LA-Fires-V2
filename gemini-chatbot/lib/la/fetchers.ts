@@ -10,6 +10,9 @@ async function esriQuery(url: string, params: Record<string, string>) {
   const qs = new URLSearchParams({ f: "json", ...params }).toString();
   const full = `${url}?${qs}`;
 
+  //  LOG #1: before the request
+  console.log("[ArcGIS] GET", full);
+
   for (let attempt = 0; attempt <= ARCGIS_RETRIES; attempt++) {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), ARCGIS_TIMEOUT_MS);
@@ -18,12 +21,14 @@ async function esriQuery(url: string, params: Record<string, string>) {
       const res = await fetch(full, { method: "GET", cache: "no-store", signal: ctrl.signal as any });
       clearTimeout(to);
 
+      //  LOG #2: after the response arrives
+      console.log("[ArcGIS] status", res.status, res.statusText);
+
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         throw new Error(`ArcGIS ${res.status} ${res.statusText} :: ${body?.slice(0, 200)}`);
       }
       const json = await res.json();
-      // ArcGIS error payloads still return 200 sometimes:
       if ((json as any)?.error) {
         throw new Error(`ArcGIS error :: ${JSON.stringify((json as any).error).slice(0, 200)}`);
       }
@@ -31,13 +36,12 @@ async function esriQuery(url: string, params: Record<string, string>) {
     } catch (err) {
       clearTimeout(to);
       if (attempt === ARCGIS_RETRIES) throw err;
-      // small jitter before retry
       await new Promise(r => setTimeout(r, 250 * (attempt + 1)));
     }
   }
-  // unreachable
   throw new Error("esriQuery: exhausted retries");
 }
+
 
 function digitsOnly(id: string) {
   return id.replace(/\D/g, "");
