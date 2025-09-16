@@ -1,3 +1,4 @@
+import { assertCoreEndpoints } from "@/lib/la/endpoints";
 import { NextRequest, NextResponse } from "next/server";
 import { lookupAssessor } from "@/lib/la/fetchers";
 
@@ -6,6 +7,9 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    // Fail fast if env vars aren’t set
+    assertCoreEndpoints();
+
     const body = await req.json().catch(() => ({}));
     const { address, apn } = body || {};
 
