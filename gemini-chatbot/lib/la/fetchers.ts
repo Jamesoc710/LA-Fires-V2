@@ -7,21 +7,33 @@ const ARCGIS_TIMEOUT_MS = 8000;
 const ARCGIS_RETRIES = 2;
 
 async function esriQuery(url: string, params: Record<string, string>) {
-  const qs = new URLSearchParams({ f: "json", ...params }).toString();
+  // Always include f=json
+  const bodyParams = new URLSearchParams({ f: "json", ...params });
+  const qs = bodyParams.toString();
   const full = `${url}?${qs}`;
 
-  //  LOG #1: before the request
-  console.log("[ArcGIS] GET", full);
+  //  use POST for large requests or when geometry exists (safer for polygons)
+  const hasGeometry = !!params.geometry;
+  const tooLong = full.length > 1800; // conservative; many servers fail > 2000
+  const usePost = hasGeometry || tooLong;
+
+  console.log("[ArcGIS] REQUEST", { url, method: usePost ? "POST" : "GET", hasGeometry, len: full.length });
 
   for (let attempt = 0; attempt <= ARCGIS_RETRIES; attempt++) {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), ARCGIS_TIMEOUT_MS);
 
     try {
-      const res = await fetch(full, { method: "GET", cache: "no-store", signal: ctrl.signal as any });
+      const res = await fetch(usePost ? url : `${url}?${qs}`, {
+        method: usePost ? "POST" : "GET",
+        // ArcGIS expects form-encoded on POST
+        headers: usePost ? { "content-type": "application/x-www-form-urlencoded" } : undefined,
+        body: usePost ? qs : undefined,
+        cache: "no-store",
+        signal: ctrl.signal as any,
+      });
       clearTimeout(to);
 
-      //  LOG #2: after the response arrives
       console.log("[ArcGIS] status", res.status, res.statusText);
 
       if (!res.ok) {
@@ -41,6 +53,7 @@ async function esriQuery(url: string, params: Record<string, string>) {
   }
   throw new Error("esriQuery: exhausted retries");
 }
+
 
 
 function digitsOnly(id: string) {
