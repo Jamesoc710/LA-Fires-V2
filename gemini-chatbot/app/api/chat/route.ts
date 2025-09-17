@@ -1,179 +1,198 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { loadAllContextFiles } from '../../utils/contextLoader';
+import { NextRequest, NextResponse } from "next/server";
+import { unstable_noStore as noStore } from "next/cache";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { loadAllContextFiles } from "../../utils/contextLoader";
 import { lookupZoning, lookupAssessor } from "@/lib/la/fetchers";
 
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 
-// Initialize the Google Generative AI with your API key
-// You'll need to add your API key to .env.local file
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+
+/* ------------------------------- helpers ------------------------------- */
 
 function wantsParcelLookup(s: string) {
-  const q = s.toLowerCase();
+  const q = (s || "").toLowerCase();
   return (
     q.includes("apn") ||
     q.includes("zoning") ||
     q.includes("overlay") ||
     q.includes("assessor") ||
     q.includes("parcel") ||
-    q.includes("what is my") // common phrasing
+    q.includes("what is my")
   );
 }
 
 function extractApn(s: string): string | undefined {
-  const m = s.match(/\b(\d{4}-?\d{3}-?\d{3})\b/); // e.g., 5843-004-015 or 5843004015
+  // e.g., 5843-004-015 or 5843004015
+  const m = (s || "").match(/\b(\d{4}-?\d{3}-?\d{3})\b/);
   return m ? m[1] : undefined;
 }
 
 function extractAddress(s: string): string | undefined {
-  // super-light heuristic; you can improve later or let the user provide it explicitly
-  if (/\d{3,5}\s+\w+/.test(s)) return s.trim();
+  // placeholder; we’re not doing address→parcel yet
+  if (/\d{3,5}\s+\w+/.test(s || "")) return s.trim();
   return undefined;
 }
 
+/* --------------------------------- POST -------------------------------- */
 
 export async function POST(request: NextRequest) {
   try {
+    noStore(); // avoid route-level caching while testing
+
     const { messages } = await request.json();
-    
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
-        { error: 'Invalid request. Messages must be an array.' },
+        { error: "Invalid request. Messages must be an array." },
         { status: 400 }
       );
     }
 
-    // Load context from files
+    // Load static context (files)
     const contextData = await loadAllContextFiles();
-    
 
-
-    // Custom system prompt for Gemini Flash Lite
+    // --- Step 1: refine intent with Flash Lite ---
     const customLiteSystemPrompt = {
-      role: 'user',
-      parts: [{
-        text: `You are tasked with refining the user's inputted question about Los Angeles building codes.
-    
-    Your goal is to:
-    - Make the question as clear, specific, and precise as possible.
-    - Keep the original intent and meaning.
-    - Eliminate vague or ambiguous wording.
-    - If necessary, add brief clarifications to make it easier for a code reviewer to understand the request.
-    
-    Important:
-    - Do not change the meaning of the user's original question.
-    - Do not answer the question.
-    - Only return the refined and clarified version of the question.
-    
-    Respond with only the improved question, nothing else.`
-      }]
+      role: "user",
+      parts: [
+        {
+          text: `You are tasked with refining the user's inputted question about Los Angeles building codes.
+
+Your goal is to:
+- Make the question as clear, specific, and precise as possible.
+- Keep the original intent and meaning.
+- Eliminate vague or ambiguous wording.
+- If necessary, add brief clarifications to make it easier for a code reviewer to understand the request.
+
+Important:
+- Do not change the meaning of the user's original question.
+- Do not answer the question.
+- Only return the refined and clarified version of the question.
+
+Respond with only the improved question, nothing else.`,
+        },
+      ],
     };
-    // Step 1: Determine intent of the user's query using Flash Lite model
-    const intentModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+
+    const intentModel = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash-lite",
+    });
     const intentPrompt = [
       customLiteSystemPrompt,
-      {
-        role: 'user',
-        parts: [{ text: messages[messages.length - 1].content }]
-      }
+      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
     ];
-    const intentResult = await intentModel.generateContent({ contents: intentPrompt });
+    const intentResult = await intentModel.generateContent({
+      contents: intentPrompt,
+    });
     const intent = intentResult.response.text().trim();
 
-//----------------END OF LITE MODEL HANDLING-------------------------------------------------
-//-------------------------------------------------------------------------------------------
-// ----- OPTIONAL LIVE LOOKUP PRE-STEP -----
-let toolContext = "";
-try {
-  const lastUser = messages[messages.length - 1]?.content || "";
+    // --- Step 2: live lookups (TOOL OUTPUTS) ---
+    let toolContext = "";
+    try {
+      const lastUser = messages[messages.length - 1]?.content || "";
+      if (wantsParcelLookup(lastUser)) {
+        const apn = extractApn(lastUser);
+        const address = extractAddress(lastUser);
 
-  if (wantsParcelLookup(lastUser)) {
-    const apn = extractApn(lastUser);
-    const address = extractAddress(lastUser);
+        if (apn) {
+          const [zRes, aRes] = await Promise.allSettled([
+            lookupZoning(apn),
+            lookupAssessor(apn),
+          ]);
 
-    // For now, our fetchers only support AIN/APN, not address geocoding.
-    if (apn) {
-      // Zoning by APN/AIN
-      const zoning = await lookupZoning(apn);
-      toolContext += `\n\n[TOOL:zoning_lookup]\n${JSON.stringify(zoning, null, 2)}`;
-      console.log("DEBUG zoning result:", zoning);
+          if (zRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(
+              zRes.value,
+              null,
+              2
+            )}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
+          }
 
-      // Assessor by APN/AIN
-      const assessor = await lookupAssessor(apn);
-      toolContext += `\n\n[TOOL:assessor_lookup]\n${JSON.stringify(assessor, null, 2)}`;
-      console.log("DEBUG assessor result:", assessor);
-    } else if (address) {
-      toolContext += `\n\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
-      console.log("DEBUG note: address present, APN missing");
-    } else {
-      toolContext += `\n\n[TOOL_NOTE] No APN/AIN or address detected.`;
+          if (aRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(
+              aRes.value,
+              null,
+              2
+            )}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
+          }
+        } else if (address) {
+          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+        } else {
+          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+        }
+      }
+    } catch (e) {
+      toolContext += `\n[TOOL_ERROR] ${String(e)}`;
     }
-  }
-} catch (e) {
-  toolContext += `\n\n[TOOL_ERROR] ${String(e)}`;
-}
+    console.log("[CHAT] toolContext length:", toolContext.length);
 
-// ----- END LIVE LOOKUP PRE-STEP -----
+    // --- Step 3: build prompts with tools first ---
+    const systemPreamble = `
+You are LA-Fires Assistant.
+If TOOL OUTPUTS exist, you MUST answer using them. Do NOT refuse when tool data is present.
+Prefer TOOL OUTPUTS over any other text. If they are missing, say "**Section: Unknown**" when sections do not apply (e.g., ArcGIS zoning/assessor), and ask the user for an APN/AIN if needed.
+For zoning, summarize ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and include TITLE_22 when available.
+`.trim();
 
+    const customSystemPrompt = {
+      role: "user",
+      parts: [
+        {
+          text: `You must include a section heading **only if present** in the provided materials.
+If no section exists (e.g., ArcGIS zoning / assessor results), write "**Section: Unknown**" and continue.
 
-    // Custom system prompt for Gemini Flash
-const customSystemPrompt = {
-  role: 'user',
-  parts: [{
-    text: `You must always include the specific section title or source heading where you found the information, formatted in bold markdown. 
-Example: "**Section: H103.1**".
+Instructions:
+- Use TOOL OUTPUTS when provided. They have priority over everything else.
+- Get straight to the relevant facts (zoning code, description, category, planning area; assessor situs address, year built, area).
+- Do not add disclaimers or refuse when tool data is present.`,
+        },
+      ],
+    };
 
-If no section is available, clearly state "**Section: Unknown**".
+    const responseModel = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+    });
 
-Important Instructions:
-- Get straight to the relevant information.
-- Do not include introductory remarks, summaries, disclaimers, or recommendations.
-- Only present the answer based directly on the context provided.
-- Write in a direct, professional tone focused solely on delivering the requested information.
-`
-  }]
-};
-
-// Step 2: Generate response using intent and context
-const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-
-const combinedPrompt = [
-  customSystemPrompt,
-  { role: 'user', parts: [{ text: `Intent: ${intent}` }] },
-
-  // ✅ include static context + tool outputs
-  {
-    role: 'user',
-    parts: [{
-      text: `You are a helpful assistant that provides information about Los Angeles fires and fire safety.
-Please use the following context AND tool outputs (if any) to inform your responses:
-
-=== STATIC CONTEXT ===
-${contextData}
-
-=== TOOL OUTPUTS ===
+    const combinedPrompt = [
+      // Make tools authoritative and visible early
+      { role: "user", parts: [{ text: systemPreamble }] },
+      customSystemPrompt,
+      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              `=== TOOL OUTPUTS (authoritative) ===
 ${toolContext || "(none)"}
-` // <-- close the backtick here
-    }]
-  },
 
-  // include the original conversation history
-  ...messages.map(msg => ({
-    role: msg.role === 'user' ? 'user' : 'model',
-    parts: [{ text: msg.content }]
-  })),
-];
+=== STATIC CONTEXT (supporting) ===
+${contextData}
+`.trim(),
+          },
+        ],
+      },
+      // last user question last
+      {
+        role: "user",
+        parts: [{ text: messages[messages.length - 1].content }],
+      },
+    ];
 
-const responseResult = await responseModel.generateContent({ contents: combinedPrompt });
-const text = responseResult.response.text().trim();
-
+    const responseResult = await responseModel.generateContent({
+      contents: combinedPrompt,
+    });
+    const text = responseResult.response.text().trim();
 
     return NextResponse.json({ response: text, intent });
   } catch (error: any) {
-    console.error('Error in chat API:', error);
+    console.error("Error in chat API:", error);
     return NextResponse.json(
-      { error: error.message || 'An error occurred while processing your request.' },
+      { error: error.message || "An error occurred while processing your request." },
       { status: 500 }
     );
   }
