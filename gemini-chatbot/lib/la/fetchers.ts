@@ -81,6 +81,16 @@ function pickLargestFeatureByArea(features: any[] | undefined) {
   return best;
 }
 
+function normalizeApnVariants(id: string) {
+  const digits = id.replace(/\D/g, "");                                // 5843004015
+  const dashed =
+    digits.length === 10
+      ? `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`
+      : id;                                                             // fallback
+  return { digits, dashed };
+}
+
+
 function areaOfGeom(geom: any): number | null {
   if (!geom) return null;
   try {
@@ -139,24 +149,22 @@ function makeCentroidFromGeom(geom: any) {
 /* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
 
 export async function getParcelByAINorAPN(id: string) {
-  const digits = digitsOnly(id);
-  const where = [
-    `REPLACE(UPPER(AIN),'-','')='${digits}'`,
-    `REPLACE(UPPER(APN),'-','')='${digits}'`,
-  ].join(" OR ");
+  const { digits, dashed } = normalizeApnVariants(id);
+
+  // NOTE: no SQL functions; many LA layers disallow them
+  const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
 
   const r = await esriQuery(endpoints.znetAddressSearch, {
     returnGeometry: "true",
     outSR: "102100",
     where,
-    // keep lean; add more only if you show them in UI
     outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
   });
 
-  // if multiple polygons (condos/complex), take the largest
   const feat = pickLargestFeatureByArea(r.features);
   return feat ?? null;
 }
+
 
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 
@@ -286,49 +294,24 @@ export async function lookupZoning(id: string) {
 /* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
 
 export async function lookupAssessor(id: string) {
-  const digits = digitsOnly(id);
+  const { digits, dashed } = normalizeApnVariants(id);
 
   if (!endpoints.assessorParcelQuery) {
     return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
   }
 
-  const where = [
-    `REPLACE(UPPER(AIN),'-','')='${digits}'`,
-    `REPLACE(UPPER(APN),'-','')='${digits}'`,
-  ].join(" OR ");
+  // No SQL functions; try both dashed and undashed
+  const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
 
   const outFields = [
-    "AIN",
-    "APN",
-    "SitusAddress",
-    "SitusCity",
-    "SitusZIP",
-    "UseCode",
-    "UseType",
-    "UseDescription",
-    // multi-part improvements/main area + earliest year built
-    "YearBuilt1",
-    "YearBuilt2",
-    "YearBuilt3",
-    "YearBuilt4",
-    "EffectiveYear1",
-    "EffectiveYear2",
-    "EffectiveYear3",
-    "EffectiveYear4",
-    "SQFTmain1",
-    "SQFTmain2",
-    "SQFTmain3",
-    "SQFTmain4",
-    "Units1",
-    "Units2",
-    "Units3",
-    "Units4",
-    "Bedrooms1",
-    "Bathrooms1",
-    // lot size if present on this layer (sometimes missing)
-    "LotArea",
-    "LOT_AREA",
-    "LOT_SQFT",
+    "AIN","APN","SitusAddress","SitusCity","SitusZIP",
+    "UseCode","UseType","UseDescription",
+    "YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4",
+    "EffectiveYear1","EffectiveYear2","EffectiveYear3","EffectiveYear4",
+    "SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4",
+    "Units1","Units2","Units3","Units4",
+    "Bedrooms1","Bathrooms1",
+    "LotArea","LOT_AREA","LOT_SQFT"
   ].join(",");
 
   const r = await esriQuery(endpoints.assessorParcelQuery, {
@@ -343,21 +326,22 @@ export async function lookupAssessor(id: string) {
   }
 
   const livingArea =
-    ["SQFTmain1", "SQFTmain2", "SQFTmain3", "SQFTmain4"]
-      .map((k) => Number(a[k]) || 0)
+    ["SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4"]
+      .map(k => Number(a[k]) || 0)
       .reduce((s, n) => s + n, 0) || null;
 
-  const yearBuiltVals = ["YearBuilt1", "YearBuilt2", "YearBuilt3", "YearBuilt4"]
-    .map((k) => parseInt(a[k], 10))
-    .filter((n) => !Number.isNaN(n));
+  const yearBuiltVals = ["YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4"]
+    .map(k => parseInt(a[k], 10))
+    .filter(n => !Number.isNaN(n));
   const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
 
   const lotSqft =
     Number(a.LotArea) || Number(a.LOT_AREA) || Number(a.LOT_SQFT) || null;
 
-  const units = ["Units1", "Units2", "Units3", "Units4"]
-    .map((k) => Number(a[k]) || 0)
-    .reduce((s, n) => s + n, 0) || null;
+  const units =
+    ["Units1","Units2","Units3","Units4"]
+      .map(k => Number(a[k]) || 0)
+      .reduce((s, n) => s + n, 0) || null;
 
   return {
     ain: a.AIN ?? null,
