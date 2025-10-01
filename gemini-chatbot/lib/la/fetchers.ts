@@ -314,50 +314,57 @@ export async function lookupAssessor(id: string) {
     "LotArea","LOT_AREA","LOT_SQFT"
   ].join(",");
 
-  const r = await esriQuery(endpoints.assessorParcelQuery, {
-    returnGeometry: "false",
-    where,
-    outFields,
-  });
+  try {
+    const r = await esriQuery(endpoints.assessorParcelQuery, {
+      returnGeometry: "false",
+      where,
+      outFields,
+    });
 
-  const a = r.features?.[0]?.attributes;
-  if (!a) {
-    return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
+    const a = r.features?.[0]?.attributes;
+    if (!a) {
+      return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
+    }
+
+    const livingArea =
+      ["SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4"]
+        .map(k => Number(a[k]) || 0)
+        .reduce((s, n) => s + n, 0) || null;
+
+    const yearBuiltVals = ["YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4"]
+      .map(k => parseInt(a[k], 10))
+      .filter(n => !Number.isNaN(n));
+    const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
+
+    const lotSqft =
+      Number(a.LotArea) || Number(a.LOT_AREA) || Number(a.LOT_SQFT) || null;
+
+    const units =
+      ["Units1","Units2","Units3","Units4"]
+        .map(k => Number(a[k]) || 0)
+        .reduce((s, n) => s + n, 0) || null;
+
+    return {
+      ain: a.AIN ?? null,
+      apn: a.APN ?? null,
+      situs: a.SitusAddress ?? null,
+      city: a.SitusCity ?? null,
+      zip: a.SitusZIP ?? null,
+      use: a.UseDescription || a.UseType || a.UseCode || null,
+      livingArea,
+      yearBuilt,
+      lotSqft,
+      units,
+      bedrooms: a.Bedrooms1 ?? null,
+      bathrooms: a.Bathrooms1 ?? null,
+      links: { assessor: endpoints.assessorViewerForAIN((a.AIN ?? digits).toString()) },
+    };
+  } catch (e) {
+    // <- THIS IS THE IMPORTANT PART
+    console.log("[ASSESSOR] query failed, returning link instead:", String(e));
+    return {
+      links: { assessor: endpoints.assessorViewerForAIN(digits) },
+      note: "Assessor API returned an error; providing official portal link.",
+    };
   }
-
-  const livingArea =
-    ["SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4"]
-      .map(k => Number(a[k]) || 0)
-      .reduce((s, n) => s + n, 0) || null;
-
-  const yearBuiltVals = ["YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4"]
-    .map(k => parseInt(a[k], 10))
-    .filter(n => !Number.isNaN(n));
-  const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
-
-  const lotSqft =
-    Number(a.LotArea) || Number(a.LOT_AREA) || Number(a.LOT_SQFT) || null;
-
-  const units =
-    ["Units1","Units2","Units3","Units4"]
-      .map(k => Number(a[k]) || 0)
-      .reduce((s, n) => s + n, 0) || null;
-
-  return {
-    ain: a.AIN ?? null,
-    apn: a.APN ?? null,
-    situs: a.SitusAddress ?? null,
-    city: a.SitusCity ?? null,
-    zip: a.SitusZIP ?? null,
-    use: a.UseDescription || a.UseType || a.UseCode || null,
-    livingArea,
-    yearBuilt,
-    lotSqft,
-    units,
-    bedrooms: a.Bedrooms1 ?? null,
-    bathrooms: a.Bathrooms1 ?? null,
-    links: {
-      assessor: endpoints.assessorViewerForAIN((a.AIN ?? digits).toString()),
-    },
-  };
 }
