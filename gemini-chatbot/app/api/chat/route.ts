@@ -10,22 +10,19 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 /* ------------------------------- helpers ------------------------------- */
 
+
 function wantsParcelLookup(s: string) {
-  const q = (s || "").toLowerCase();
-  return (
-    q.includes("apn") ||
-    q.includes("zoning") ||
-    q.includes("overlay") ||
-    q.includes("assessor") ||
-    q.includes("parcel") ||
-    q.includes("what is my")
-  );
+  // fire tools if user mentions zoning-ish terms OR a 10-digit number is present
+  const digits = s.replace(/\D/g, "");
+  return digits.length >= 9 || /apn|ain|zoning|overlay|assessor|parcel/i.test(s);
 }
 
 function extractApn(s: string): string | undefined {
-  // e.g., 5843-004-015 or 5843004015
-  const m = (s || "").match(/\b(\d{4}-?\d{3}-?\d{3})\b/);
-  return m ? m[1] : undefined;
+  // return 10-digit APN; accepts “5843-004-015”, “5843 004 015”, or “5843004015”
+  const digits = s.replace(/\D/g, "");
+  if (digits.length === 10) return digits;
+  const m = s.match(/\b(\d{4}[-\s]?\d{3}[-\s]?\d{3})\b/);
+  return m ? m[1].replace(/\D/g, "") : undefined;
 }
 
 function extractAddress(s: string): string | undefined {
@@ -76,6 +73,7 @@ Respond with only the improved question, nothing else.`,
 
     const intentModel = genAI.getGenerativeModel({
       model: "gemini-2.0-flash-lite",
+      generationConfig: { temperature: 0.1 }
     });
     const intentPrompt = [
       customLiteSystemPrompt,
@@ -155,6 +153,7 @@ Instructions:
 
     const responseModel = genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
+      generationConfig: { temperature: 0.1 }
     });
 
     const combinedPrompt = [
