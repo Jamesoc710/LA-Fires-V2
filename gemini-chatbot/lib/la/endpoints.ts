@@ -8,6 +8,12 @@ type EndpointMap = Readonly<{
   ZNET_VIEWER: string;
   GISNET_VIEWER: string;
   TITLE_22: string;
+  OVERLAY_QUERY_1?: string;
+  OVERLAY_QUERY_2?: string;
+  OVERLAY_QUERY_3?: string;
+  OVERLAY_QUERY_4?: string;
+  OVERLAY_QUERY_5?: string;
+  OVERLAY_QUERY_6?: string;
 }>;
 
 const env = (k: string, fallback = "") => (process.env[k]?.trim() ?? fallback);
@@ -22,6 +28,13 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
   GISNET_VIEWER: "https://planning.lacounty.gov/gisnet",
   TITLE_22:
     "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
+
+  OVERLAY_QUERY_1: env("OVERLAY_QUERY_1"),
+  OVERLAY_QUERY_2: env("OVERLAY_QUERY_2"),
+  OVERLAY_QUERY_3: env("OVERLAY_QUERY_3"),
+  OVERLAY_QUERY_4: env("OVERLAY_QUERY_4"),
+  OVERLAY_QUERY_5: env("OVERLAY_QUERY_5"),
+  OVERLAY_QUERY_6: env("OVERLAY_QUERY_6"),
 });
 
 // Small convenience object used by fetchers.ts
@@ -29,6 +42,16 @@ export const endpoints = {
   znetAddressSearch: ENDPOINTS.ZNET_ADDRESS_SEARCH,
   gisnetParcelQuery: ENDPOINTS.GISNET_PARCEL_QUERY,
   assessorParcelQuery: ENDPOINTS.ASSESSOR_PARCEL_QUERY,
+
+  overlayQueries: [
+    ENDPOINTS.OVERLAY_QUERY_1,
+    ENDPOINTS.OVERLAY_QUERY_2,
+    ENDPOINTS.OVERLAY_QUERY_3,
+    ENDPOINTS.OVERLAY_QUERY_4,
+    ENDPOINTS.OVERLAY_QUERY_5,
+    ENDPOINTS.OVERLAY_QUERY_6,
+  ].filter(Boolean) as string[],
+
   znetViewer: ENDPOINTS.ZNET_VIEWER,
   gisnetViewer: ENDPOINTS.GISNET_VIEWER,
   assessorViewerForAIN: (ain: string) =>
@@ -58,4 +81,3 @@ export function assertCoreEndpoints() {
     );
   }
 }
-
