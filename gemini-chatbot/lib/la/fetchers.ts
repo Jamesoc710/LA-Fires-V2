@@ -291,6 +291,108 @@ export async function lookupZoning(id: string) {
   };
 }
 
+/*------OVERLAY LOOKUP--------*/
+export async function lookupOverlays(id: string) {
+  // 1) get parcel geometry
+  const parcel = await getParcelByAINorAPN(id);
+  if (!parcel?.geometry) {
+    return { overlays: [], note: "Parcel geometry not found for this APN/AIN." };
+  }
+
+  // use a tiny payload for reliability (point); fallback to envelope if needed
+  const geom = parcel.geometry;
+  const envelope = makeEnvelopeFromGeom(geom);
+  const centroid = makeCentroidFromGeom(geom);
+
+  const base = {
+    returnGeometry: "false",
+    inSR: "102100",
+    spatialRel: "esriSpatialRelIntersects",
+    outFields: "*",              // best shot; fields vary by layer
+  };
+
+  const results: Array<{
+    url: string;
+    ok: boolean;
+    method: "point" | "envelope";
+    attributes?: Record<string, any> | null;
+    rawCount?: number;
+    error?: string;
+    label?: string;
+  }> = [];
+
+  for (const url of endpoints.overlayQueries) {
+    // try POINT first (fast & tiny)
+    try {
+      const r1 = await esriQuery(url, {
+        ...base,
+        geometry: JSON.stringify(centroid),
+        geometryType: "esriGeometryPoint",
+      });
+      const attrs = r1.features?.[0]?.attributes ?? null;
+      results.push({
+        url,
+        ok: Boolean(attrs),
+        method: "point",
+        attributes: attrs,
+        rawCount: Array.isArray(r1.features) ? r1.features.length : undefined,
+        label: summarizeOverlay(attrs),
+      });
+      continue;
+    } catch (e) {
+      // fall through to envelope
+    }
+
+    // fallback: ENVELOPE (still small)
+    try {
+      const r2 = await esriQuery(url, {
+        ...base,
+        geometry: JSON.stringify(envelope),
+        geometryType: "esriGeometryEnvelope",
+      });
+      const attrs = r2.features?.[0]?.attributes ?? null;
+      results.push({
+        url,
+        ok: Boolean(attrs),
+        method: "envelope",
+        attributes: attrs,
+        rawCount: Array.isArray(r2.features) ? r2.features.length : undefined,
+        label: summarizeOverlay(attrs),
+      });
+    } catch (e) {
+      results.push({ url, ok: false, method: "envelope", error: String(e) });
+    }
+  }
+
+  return { overlays: results };
+}
+
+/** Attempt to make a short human label from whatever fields the layer has. */
+function summarizeOverlay(a?: Record<string, any> | null): string | undefined {
+  if (!a) return undefined;
+
+  // Try common field names you’ll see across those layers:
+  const candidates = [
+    a.NAME, a.Title, a.TITLE, a.LABEL,
+    a.DISTRICT, a.DIST_TYPE, a.CATEGORY, a.TYPE,
+    a.PLAN_NAME, a.PLAN, a.CSD_NAME,
+    a.SEA_NAME, a.CRANAME, a.RL_NAME,
+    a.ZONE, a.ZONING, a.Z_CAT, a.SPEC_PLAN,
+  ].filter(Boolean);
+
+  if (candidates.length) return String(candidates[0]);
+
+  // last resort: show first two keys
+  const keys = Object.keys(a);
+  if (keys.length) {
+    const pick = keys.slice(0, 2).map(k => `${k}:${a[k]}`).join(", ");
+    return pick;
+  }
+}
+
+
+
+
 /* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
 
 export async function lookupAssessor(id: string) {
