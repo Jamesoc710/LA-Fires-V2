@@ -1,3 +1,4 @@
+import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -15,6 +16,9 @@ function wantsParcelLookup(s: string) {
   // fire tools if user mentions zoning-ish terms OR a 10-digit number is present
   const digits = s.replace(/\D/g, "");
   return digits.length >= 9 || /apn|ain|zoning|overlay|assessor|parcel/i.test(s);
+}
+function wantsOverlay(s: string) {
+  return /overlay|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
 }
 
 function extractApn(s: string): string | undefined {
@@ -93,35 +97,36 @@ Respond with only the improved question, nothing else.`,
         const address = extractAddress(lastUser);
 
         if (apn) {
-          const [zRes, aRes] = await Promise.allSettled([
+          const [zRes, aRes, oRes] = await Promise.allSettled([
             lookupZoning(apn),
             lookupAssessor(apn),
+            lookupOverlays(apn),      // <-- NEW
           ]);
-
+        
           if (zRes.status === "fulfilled") {
-            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(
-              zRes.value,
-              null,
-              2
-            )}`;
+            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
           } else {
             toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
           }
-
+        
           if (aRes.status === "fulfilled") {
-            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(
-              aRes.value,
-              null,
-              2
-            )}`;
+            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
           } else {
             toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
+          }
+        
+          // overlays are useful whether or not the user explicitly asked
+          if (oRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:overlays] ${String(oRes.reason)}`;
           }
         } else if (address) {
           toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
         } else {
           toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
         }
+
       }
     } catch (e) {
       toolContext += `\n[TOOL_ERROR] ${String(e)}`;
