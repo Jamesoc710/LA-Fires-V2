@@ -1,9 +1,8 @@
-import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { loadAllContextFiles } from "../../utils/contextLoader";
-import { lookupZoning, lookupAssessor } from "@/lib/la/fetchers";
+import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 
 export const runtime = "nodejs";
 
