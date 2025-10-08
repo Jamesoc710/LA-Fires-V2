@@ -402,71 +402,70 @@ export async function lookupAssessor(id: string) {
     return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
   }
 
-  // No SQL functions; try both dashed and undashed
+  // Try by AIN or APN (dashed and undashed)
   const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
 
-  const outFields = [
-    "AIN","APN","SitusAddress","SitusCity","SitusZIP",
-    "UseCode","UseType","UseDescription",
-    "YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4",
-    "EffectiveYear1","EffectiveYear2","EffectiveYear3","EffectiveYear4",
-    "SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4",
-    "Units1","Units2","Units3","Units4",
-    "Bedrooms1","Bathrooms1",
-    "LotArea","LOT_AREA","LOT_SQFT"
-  ].join(",");
-
+  // IMPORTANT: ask for everything, then only read what exists
+  let r: any;
   try {
-    const r = await esriQuery(endpoints.assessorParcelQuery, {
+    r = await esriQuery(endpoints.assessorParcelQuery, {
       returnGeometry: "false",
       where,
-      outFields,
+      outFields: "*",          // <-- safe
     });
-
-    const a = r.features?.[0]?.attributes;
-    if (!a) {
-      return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
-    }
-
-    const livingArea =
-      ["SQFTmain1","SQFTmain2","SQFTmain3","SQFTmain4"]
-        .map(k => Number(a[k]) || 0)
-        .reduce((s, n) => s + n, 0) || null;
-
-    const yearBuiltVals = ["YearBuilt1","YearBuilt2","YearBuilt3","YearBuilt4"]
-      .map(k => parseInt(a[k], 10))
-      .filter(n => !Number.isNaN(n));
-    const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
-
-    const lotSqft =
-      Number(a.LotArea) || Number(a.LOT_AREA) || Number(a.LOT_SQFT) || null;
-
-    const units =
-      ["Units1","Units2","Units3","Units4"]
-        .map(k => Number(a[k]) || 0)
-        .reduce((s, n) => s + n, 0) || null;
-
-    return {
-      ain: a.AIN ?? null,
-      apn: a.APN ?? null,
-      situs: a.SitusAddress ?? null,
-      city: a.SitusCity ?? null,
-      zip: a.SitusZIP ?? null,
-      use: a.UseDescription || a.UseType || a.UseCode || null,
-      livingArea,
-      yearBuilt,
-      lotSqft,
-      units,
-      bedrooms: a.Bedrooms1 ?? null,
-      bathrooms: a.Bathrooms1 ?? null,
-      links: { assessor: endpoints.assessorViewerForAIN((a.AIN ?? digits).toString()) },
-    };
   } catch (e) {
-    // <- THIS IS THE IMPORTANT PART
-    console.log("[ASSESSOR] query failed, returning link instead:", String(e));
+    console.log("[ASSESSOR] hard fail -> returning portal link:", String(e));
     return {
       links: { assessor: endpoints.assessorViewerForAIN(digits) },
       note: "Assessor API returned an error; providing official portal link.",
     };
   }
+
+  const a = r?.features?.[0]?.attributes;
+  if (!a) {
+    return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
+  }
+
+  // Safely read values if they exist on this layer
+  const get = (k: string) => (k in a ? a[k] : null);
+
+  // Commonly available on the LACounty_Parcel layer:
+  const ain = get("AIN") ?? null;
+  const apn = get("APN") ?? null;
+  const situs = get("SitusAddress") ?? null;
+  const city = get("SitusCity") ?? null;
+  const zip = get("SitusZIP") ?? null;
+  const use =
+    get("UseDescription") ?? get("UseType") ?? get("UseCode") ?? null;
+
+  // Optional fields (many layers won’t have these)
+  const maybeNums = (...keys: string[]) =>
+    keys.map(k => Number(get(k)) || 0).reduce((s, n) => s + n, 0) || null;
+
+  const livingArea = maybeNums("SQFTmain1", "SQFTmain2", "SQFTmain3", "SQFTmain4");
+
+  const yearBuiltVals = ["YearBuilt1", "YearBuilt2", "YearBuilt3", "YearBuilt4"]
+    .map(k => parseInt(get(k), 10))
+    .filter(n => !Number.isNaN(n));
+  const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
+
+  const lotSqft =
+    Number(get("LotArea")) || Number(get("LOT_AREA")) || Number(get("LOT_SQFT")) || null;
+
+  const units =
+    ["Units1", "Units2", "Units3", "Units4"]
+      .map(k => Number(get(k)) || 0)
+      .reduce((s, n) => s + n, 0) || null;
+
+  return {
+    ain, apn, situs, city, zip,
+    use,
+    livingArea,
+    yearBuilt,
+    lotSqft,
+    units,
+    bedrooms: get("Bedrooms1"),
+    bathrooms: get("Bathrooms1"),
+    links: { assessor: endpoints.assessorViewerForAIN((ain ?? digits).toString()) },
+  };
 }
