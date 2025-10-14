@@ -1,142 +1,202 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { loadAllContextFiles } from '../../utils/contextLoader';
+import { NextRequest, NextResponse } from "next/server";
+import { unstable_noStore as noStore } from "next/cache";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { loadAllContextFiles } from "../../utils/contextLoader";
+import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 
-// Initialize the Google Generative AI with your API key
-// You'll need to add your API key to .env.local file
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+export const runtime = "nodejs";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+
+/* ------------------------------- helpers ------------------------------- */
+
+
+function wantsParcelLookup(s: string) {
+  // fire tools if user mentions zoning-ish terms OR a 10-digit number is present
+  const digits = s.replace(/\D/g, "");
+  return digits.length >= 9 || /apn|ain|zoning|overlay|assessor|parcel/i.test(s);
+}
+function wantsOverlay(s: string) {
+  return /overlay|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
+}
+
+function extractApn(s: string): string | undefined {
+  // return 10-digit APN; accepts “5843-004-015”, “5843 004 015”, or “5843004015”
+  const digits = s.replace(/\D/g, "");
+  if (digits.length === 10) return digits;
+  const m = s.match(/\b(\d{4}[-\s]?\d{3}[-\s]?\d{3})\b/);
+  return m ? m[1].replace(/\D/g, "") : undefined;
+}
+
+function extractAddress(s: string): string | undefined {
+  // placeholder; we’re not doing address→parcel yet
+  if (/\d{3,5}\s+\w+/.test(s || "")) return s.trim();
+  return undefined;
+}
+
+/* --------------------------------- POST -------------------------------- */
 
 export async function POST(request: NextRequest) {
   try {
+    noStore(); // avoid route-level caching while testing
+
     const { messages } = await request.json();
-    
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
-        { error: 'Invalid request. Messages must be an array.' },
+        { error: "Invalid request. Messages must be an array." },
         { status: 400 }
       );
     }
 
-    // Load context from files
+    // Load static context (files)
     const contextData = await loadAllContextFiles();
-    
-    // Format the context and conversation history for Gemini
-    const formattedContent = formatMessagesForGemini(messages, contextData);
 
-    // Custom system prompt for Gemini Flash Lite
+    // --- Step 1: refine intent with Flash Lite ---
     const customLiteSystemPrompt = {
-      role: 'user',
-      parts: [{
-        text: `You are tasked with refining the user's inputted question about Los Angeles building codes.
-    
-    Your goal is to:
-    - Make the question as clear, specific, and precise as possible.
-    - Keep the original intent and meaning.
-    - Eliminate vague or ambiguous wording.
-    - If necessary, add brief clarifications to make it easier for a code reviewer to understand the request.
-    
-    Important:
-    - Do not change the meaning of the user's original question.
-    - Do not answer the question.
-    - Only return the refined and clarified version of the question.
-    
-    Respond with only the improved question, nothing else.`
-      }]
+      role: "user",
+      parts: [
+        {
+          text: `You are tasked with refining the user's inputted question about Los Angeles building codes.
+
+Your goal is to:
+- Make the question as clear, specific, and precise as possible.
+- Keep the original intent and meaning.
+- Eliminate vague or ambiguous wording.
+- If necessary, add brief clarifications to make it easier for a code reviewer to understand the request.
+
+Important:
+- Do not change the meaning of the user's original question.
+- Do not answer the question.
+- Only return the refined and clarified version of the question.
+
+Respond with only the improved question, nothing else.`,
+        },
+      ],
     };
-    // Step 1: Determine intent of the user's query using Flash Lite model
-    const intentModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
+
+    const intentModel = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash-lite",
+      generationConfig: { temperature: 0.1 }
+    });
     const intentPrompt = [
       customLiteSystemPrompt,
-      {
-        role: 'user',
-        parts: [{ text: messages[messages.length - 1].content }]
-      }
+      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
     ];
-    const intentResult = await intentModel.generateContent({ contents: intentPrompt });
+    const intentResult = await intentModel.generateContent({
+      contents: intentPrompt,
+    });
     const intent = intentResult.response.text().trim();
 
-//----------------END OF LITE MODEL HANDLING-------------------------------------------------
-//-------------------------------------------------------------------------------------------
+    // --- Step 2: live lookups (TOOL OUTPUTS) ---
+    let toolContext = "";
+    try {
+      const lastUser = messages[messages.length - 1]?.content || "";
+      if (wantsParcelLookup(lastUser)) {
+        const apn = extractApn(lastUser);
+        const address = extractAddress(lastUser);
 
+        if (apn) {
+          const [zRes, aRes, oRes] = await Promise.allSettled([
+            lookupZoning(apn),
+            lookupAssessor(apn),
+            lookupOverlays(apn),      // <-- NEW
+          ]);
+        
+          if (zRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
+          }
+        
+          if (aRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
+          }
+        
+          // overlays are useful whether or not the user explicitly asked
+          if (oRes.status === "fulfilled") {
+            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+          } else {
+            toolContext += `\n[TOOL_ERROR:overlays] ${String(oRes.reason)}`;
+          }
+        } else if (address) {
+          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+        } else {
+          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+        }
 
-    // Custom system prompt for Gemini Flash
-const customSystemPrompt = {
-  role: 'user',
-  parts: [{
-    text: `You must always include the specific section title or source heading where you found the information, formatted in bold markdown. 
-Example: "**Section: H103.1**".
+      }
+    } catch (e) {
+      toolContext += `\n[TOOL_ERROR] ${String(e)}`;
+    }
+    console.log("[CHAT] toolContext length:", toolContext.length);
 
-If no section is available, clearly state "**Section: Unknown**".
+    // --- Step 3: build prompts with tools first ---
+    const systemPreamble = `
+You are LA-Fires Assistant.
+If TOOL OUTPUTS exist, you MUST answer using them. Do NOT refuse when tool data is present.
+Prefer TOOL OUTPUTS over any other text. If they are missing, say "**Section: Unknown**" when sections do not apply (e.g., ArcGIS zoning/assessor), and ask the user for an APN/AIN if needed.
+For zoning, summarize ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and include TITLE_22 when available.
+`.trim();
 
-Important Instructions:
-- Get straight to the relevant information.
-- Do not include introductory remarks, summaries, disclaimers, or recommendations.
-- Only present the answer based directly on the context provided.
-- Write in a direct, professional tone focused solely on delivering the requested information.
-`
-  }]
-};
+    const customSystemPrompt = {
+      role: "user",
+      parts: [
+        {
+          text: `You must include a section heading **only if present** in the provided materials.
+If no section exists (e.g., ArcGIS zoning / assessor results), write "**Section: Unknown**" and continue.
 
-    // Step 2: Generate response using intent and context
-    const responseModel = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+Instructions:
+- Use TOOL OUTPUTS when provided. They have priority over everything else.
+- Get straight to the relevant facts (zoning code, description, category, planning area; assessor situs address, year built, area).
+- Do not add disclaimers or refuse when tool data is present.`,
+        },
+      ],
+    };
+
+    const responseModel = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      generationConfig: { temperature: 0.1 }
+    });
+
     const combinedPrompt = [
+      // Make tools authoritative and visible early
+      { role: "user", parts: [{ text: systemPreamble }] },
       customSystemPrompt,
-      { role: 'user', parts: [{ text: `Intent: ${intent}` }] },
-      { role: 'user', parts: [{ text: `You are a helpful assistant that provides information about Los Angeles fires and fire safety.\nPlease use the following context to inform your responses:\n\n${contextData}` }] },
-      // include the original conversation history
-      ...messages.map(msg => ({
-        role: msg.role === 'user' ? 'user' : 'model',
-        parts: [{ text: msg.content }]
-      }))
+      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              `=== TOOL OUTPUTS (authoritative) ===
+${toolContext || "(none)"}
+
+=== STATIC CONTEXT (supporting) ===
+${contextData}
+`.trim(),
+          },
+        ],
+      },
+      // last user question last
+      {
+        role: "user",
+        parts: [{ text: messages[messages.length - 1].content }],
+      },
     ];
-    const responseResult = await responseModel.generateContent({ contents: combinedPrompt });
+
+    const responseResult = await responseModel.generateContent({
+      contents: combinedPrompt,
+    });
     const text = responseResult.response.text().trim();
 
     return NextResponse.json({ response: text, intent });
   } catch (error: any) {
-    console.error('Error in chat API:', error);
+    console.error("Error in chat API:", error);
     return NextResponse.json(
-      { error: error.message || 'An error occurred while processing your request.' },
+      { error: error.message || "An error occurred while processing your request." },
       { status: 500 }
     );
   }
-}
-
-// Helper function to format messages for Gemini API
-function formatMessagesForGemini(messages: any[], contextData: string) {
-  // Create system prompt with context
-  const systemPrompt = `You are a helpful assistant that provides information about Los Angeles fires and fire safety.
-Please use the following context to inform your responses:
-
-${contextData}
-
-Only use the information in the context to answer questions. If you don't know the answer based on the provided context, say you don't have that information.`;
-
-  // Format the conversation for Gemini
-  const history = messages.map(msg => {
-    return {
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }]
-    };
-  });
-  
-  // For Gemini, we need to combine all this into "contents" array with proper formatting
-  // First we'll add our context as the first user message
-  const formattedContent = [
-    {
-      role: 'user',
-      parts: [{ text: systemPrompt }]
-    },
-    {
-      role: 'model',
-      parts: [{ text: 'I understand. I will use the provided context to answer questions about Los Angeles fires and fire safety.' }]
-    }
-  ];
-  
-  // Then add the conversation history
-  history.forEach(msg => {
-    formattedContent.push(msg);
-  });
-  
-  return formattedContent;
 }
