@@ -50,49 +50,72 @@ async function callOpenRouter(model: string, geminiStyleContents: any[]) {
   const apiKey = process.env.OPENROUTER_API_KEY!;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
-  // Convert Gemini-style {role, parts:[{text}]} -> OpenAI-style messages
   const messages = geminiStyleContents.map((c: any) => ({
     role: c.role === "model" ? "assistant" : c.role,
     content: (c.parts || []).map((p: any) => p.text).join(""),
   }));
 
-  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      // optional but nice for analytics
-      "HTTP-Referer": "https://la-fires-v2.vercel.app",
-      "X-Title": "LA-Fires V2",
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-    }),
+  const body = JSON.stringify({ model, messages });
+
+  const t0 = Date.now();
+  let r: Response | undefined;
+  try {
+    r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        // optional analytics (helps OR support if needed)
+        "HTTP-Referer": "https://la-fires-v2.vercel.app",
+        "X-Title": "LA-Fires V2",
+      },
+      body,
+    });
+  } catch (netErr: any) {
+    console.error("[OpenRouter] network error:", netErr?.message || netErr);
+    throw netErr;
+  }
+
+  const ms = Date.now() - t0;
+  if (!r.ok) {
+    const errText = await r.text().catch(() => "(no body)");
+    console.error("[OpenRouter] HTTP", r.status, "model:", model, "in", ms + "ms", "body:", errText.slice(0, 800));
+    throw new Error(`OpenRouter ${r.status}: ${errText}`);
+  }
+
+  const j = await r.json().catch((e) => {
+    console.error("[OpenRouter] JSON parse error:", e);
+    throw e;
   });
 
-  if (!r.ok) throw new Error(`OpenRouter ${r.status}`);
-  const j = await r.json();
   const text = j?.choices?.[0]?.message?.content ?? "";
-  if (!text) throw new Error("Empty response from OpenRouter");
+  if (!text) {
+    console.error("[OpenRouter] empty content for model:", model, "raw:", JSON.stringify(j).slice(0, 800));
+    throw new Error("Empty response from OpenRouter");
+  }
+
+  console.log("[OpenRouter] OK", model, "in", ms + "ms");
   return text.trim();
 }
 
 async function orWithRetryAndFallback(contents: any[]) {
-  const PRIMARY = process.env.OR_PRIMARY_MODEL || "google/gemini-2.0-flash";
-  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
+  const PRIMARY  = process.env.OR_PRIMARY_MODEL   || "google/gemini-2.0-flash";
+  const FALLBACK = process.env.OR_FALLBACK_MODEL  || "anthropic/claude-3.5-sonnet";
+  console.log("[ENV] OR key:", !!process.env.OPENROUTER_API_KEY, "primary:", PRIMARY, "fallback:", FALLBACK);
 
-  // Try primary up to 3 times (exponential backoff), then fallback up to 2 times
   const plans: [string, number][] = [[PRIMARY, 3], [FALLBACK, 2]];
 
   for (const [model, tries] of plans) {
     for (let i = 1; i <= tries; i++) {
       try {
+        console.log("[OpenRouter] attempt", i, "model:", model);
         return await callOpenRouter(model, contents);
       } catch (e: any) {
+        console.error("[OpenRouter] attempt failed (", model, "try", i, "):", e?.message || e);
         const retriable = /(?:429|503|5\d\d|network|timeout|fetch|rate)/i.test(String(e?.message || e));
         if (!retriable || i === tries) break;
-        const delay = Math.min(8000, Math.round(500 * 2 ** (i - 1) * (0.5 + Math.random()))); // 500ms..8s with jitter
+        const delay = Math.min(8000, Math.round(500 * 2 ** (i - 1) * (0.5 + Math.random())));
+        console.log("[OpenRouter] backoff", delay, "ms before retry");
         await sleep(delay);
       }
     }
