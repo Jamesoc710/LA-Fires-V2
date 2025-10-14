@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { loadAllContextFiles } from "../../utils/contextLoader";
 import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 
 export const runtime = "nodejs";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-
 /* ------------------------------- helpers ------------------------------- */
 
-
 function wantsParcelLookup(s: string) {
-  // fire tools if user mentions zoning-ish terms OR a 10-digit number is present
   const digits = s.replace(/\D/g, "");
   return digits.length >= 9 || /apn|ain|zoning|overlay|assessor|parcel/i.test(s);
 }
@@ -20,18 +15,94 @@ function wantsOverlay(s: string) {
   return /overlay|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
 }
 
+// Policy/Title 22 questions should NOT require APN/tools
+function isPolicyQuestion(s: string) {
+  return /title\s*22|rebuild|10%\s*rebuild|nonconform|22\.18|zoning\s*code/i.test(s || "");
+}
+
+// Accept “5843-004-015”, “5843 004 015”, or “5843004015”; return 10 digits
 function extractApn(s: string): string | undefined {
-  // return 10-digit APN; accepts “5843-004-015”, “5843 004 015”, or “5843004015”
   const digits = s.replace(/\D/g, "");
   if (digits.length === 10) return digits;
   const m = s.match(/\b(\d{4}[-\s]?\d{3}[-\s]?\d{3})\b/);
   return m ? m[1].replace(/\D/g, "") : undefined;
 }
 
+// Get the most recent valid APN across the whole conversation
+function latestApnFromMessages(messages: Array<{ role: string; content: string }>) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const apn = extractApn(messages[i]?.content || "");
+    if (apn && apn.length === 10) return apn;
+  }
+  return undefined;
+}
+
 function extractAddress(s: string): string | undefined {
-  // placeholder; we’re not doing address→parcel yet
   if (/\d{3,5}\s+\w+/.test(s || "")) return s.trim();
   return undefined;
+}
+
+/* ---------------- OpenRouter primary + fallback (no extra files) ---------------- */
+
+function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
+
+async function callOpenRouter(model: string, geminiStyleContents: any[]) {
+  const apiKey = process.env.OPENROUTER_API_KEY!;
+  if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
+
+  // Convert Gemini-style {role, parts:[{text}]} -> OpenAI-style messages
+  const messages = geminiStyleContents.map((c: any) => ({
+    role: c.role === "model" ? "assistant" : c.role,
+    content: (c.parts || []).map((p: any) => p.text).join(""),
+  }));
+
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      // optional but nice for analytics
+      "HTTP-Referer": "https://la-fires-v2.vercel.app",
+      "X-Title": "LA-Fires V2",
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+    }),
+  });
+
+  if (!r.ok) throw new Error(`OpenRouter ${r.status}`);
+  const j = await r.json();
+  const text = j?.choices?.[0]?.message?.content ?? "";
+  if (!text) throw new Error("Empty response from OpenRouter");
+  return text.trim();
+}
+
+async function orWithRetryAndFallback(contents: any[]) {
+  const PRIMARY = process.env.OR_PRIMARY_MODEL || "google/gemini-2.0-flash";
+  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
+
+  // Try primary up to 3 times (exponential backoff), then fallback up to 2 times
+  const plans: [string, number][] = [[PRIMARY, 3], [FALLBACK, 2]];
+
+  for (const [model, tries] of plans) {
+    for (let i = 1; i <= tries; i++) {
+      try {
+        return await callOpenRouter(model, contents);
+      } catch (e: any) {
+        const retriable = /(?:429|503|5\d\d|network|timeout|fetch|rate)/i.test(String(e?.message || e));
+        if (!retriable || i === tries) break;
+        const delay = Math.min(8000, Math.round(500 * 2 ** (i - 1) * (0.5 + Math.random()))); // 500ms..8s with jitter
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw new Error("All OpenRouter attempts failed");
+}
+
+function friendlyFallbackMessage() {
+  return "The AI service is busy right now. I still fetched your zoning/overlays/assessor links—try the AI summary again in a moment.";
 }
 
 /* --------------------------------- POST -------------------------------- */
@@ -48,10 +119,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const lastUser = messages[messages.length - 1]?.content || "";
+    const isPolicy = isPolicyQuestion(lastUser);
+
+    // Conversation-wide APN memory
+    let apn = extractApn(lastUser) || latestApnFromMessages(messages);
+    if (apn && apn.length !== 10) apn = undefined; // guard invalid like "123"
+
     // Load static context (files)
     const contextData = await loadAllContextFiles();
 
-    // --- Step 1: refine intent with Flash Lite ---
+    // --- Step 1: refine intent with Flash Lite via OpenRouter ---
     const customLiteSystemPrompt = {
       role: "user",
       parts: [
@@ -74,47 +152,42 @@ Respond with only the improved question, nothing else.`,
       ],
     };
 
-    const intentModel = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash-lite",
-      generationConfig: { temperature: 0.1 }
-    });
     const intentPrompt = [
       customLiteSystemPrompt,
-      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+      { role: "user", parts: [{ text: lastUser }] },
     ];
-    const intentResult = await intentModel.generateContent({
-      contents: intentPrompt,
-    });
-    const intent = intentResult.response.text().trim();
+
+    let intent = "";
+    try {
+      intent = await orWithRetryAndFallback(intentPrompt);
+    } catch {
+      intent = ""; // non-fatal; continue
+    }
 
     // --- Step 2: live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
     try {
-      const lastUser = messages[messages.length - 1]?.content || "";
-      if (wantsParcelLookup(lastUser)) {
-        const apn = extractApn(lastUser);
+      if (!isPolicy && (wantsParcelLookup(lastUser) || apn)) {
         const address = extractAddress(lastUser);
-
         if (apn) {
           const [zRes, aRes, oRes] = await Promise.allSettled([
             lookupZoning(apn),
             lookupAssessor(apn),
-            lookupOverlays(apn),      // <-- NEW
+            lookupOverlays(apn),
           ]);
-        
+
           if (zRes.status === "fulfilled") {
             toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
           } else {
             toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
           }
-        
+
           if (aRes.status === "fulfilled") {
             toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
           } else {
             toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
           }
-        
-          // overlays are useful whether or not the user explicitly asked
+
           if (oRes.status === "fulfilled") {
             toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
           } else {
@@ -123,9 +196,10 @@ Respond with only the improved question, nothing else.`,
         } else if (address) {
           toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
         } else {
-          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+          toolContext += `\n[TOOL_NOTE] No APN/AIN detected in conversation. Provide a 10-digit APN like 5843-004-015.`;
         }
-
+      } else if (isPolicy) {
+        toolContext += `\n[TOOL_NOTE] Policy/Title 22 question detected — answering from static context; parcel tools not required.`;
       }
     } catch (e) {
       toolContext += `\n[TOOL_ERROR] ${String(e)}`;
@@ -135,30 +209,27 @@ Respond with only the improved question, nothing else.`,
     // --- Step 3: build prompts with tools first ---
     const systemPreamble = `
 You are LA-Fires Assistant.
-If TOOL OUTPUTS exist, you MUST answer using them. Do NOT refuse when tool data is present.
-Prefer TOOL OUTPUTS over any other text. If they are missing, say "**Section: Unknown**" when sections do not apply (e.g., ArcGIS zoning/assessor), and ask the user for an APN/AIN if needed.
-For zoning, summarize ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and include TITLE_22 when available.
+
+Decision rules:
+- If the user asks a policy/code question (Title 22, 10% rebuild, nonconforming use), answer directly from STATIC CONTEXT. Do NOT require an APN.
+- If the user asks parcel-specific info (zoning/overlays/assessor), prefer TOOL OUTPUTS when present; otherwise ask for a 10-digit APN.
+- Never refuse when tool data is present.
 `.trim();
 
     const customSystemPrompt = {
       role: "user",
       parts: [
         {
-          text: `You must include a section heading **only if present** in the provided materials.
-If no section exists (e.g., ArcGIS zoning / assessor results), write "**Section: Unknown**" and continue.
-
-Instructions:
-- Use TOOL OUTPUTS when provided. They have priority over everything else.
-- Get straight to the relevant facts (zoning code, description, category, planning area; assessor situs address, year built, area).
-- Do not add disclaimers or refuse when tool data is present.`,
+          text: `
+Formatting rules:
+- Sections in this order when applicable: Zoning, Overlays, Assessor.
+- Do not repeat items across sections.
+- Assessor: show only situs, livingArea (append "sqft"), yearBuilt, bedrooms, bathrooms, and a portal link if provided. Omit missing fields (no "null"/"N/A").
+- If the question is policy-only, omit parcel sections unless the user also asked parcel-specific info.
+`.trim(),
         },
       ],
     };
-
-    const responseModel = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
-      generationConfig: { temperature: 0.1 }
-    });
 
     const combinedPrompt = [
       // Make tools authoritative and visible early
@@ -182,21 +253,25 @@ ${contextData}
       // last user question last
       {
         role: "user",
-        parts: [{ text: messages[messages.length - 1].content }],
+        parts: [{ text: lastUser }],
       },
     ];
 
-    const responseResult = await responseModel.generateContent({
-      contents: combinedPrompt,
-    });
-    const text = responseResult.response.text().trim();
+    // --- Step 4: final model call via OpenRouter with fallback ---
+    let text = "";
+    try {
+      text = await orWithRetryAndFallback(combinedPrompt);
+    } catch {
+      text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
+    }
 
-    return NextResponse.json({ response: text, intent });
+    return NextResponse.json({ response: text, intent }, { status: 200 });
   } catch (error: any) {
     console.error("Error in chat API:", error);
+    // Last resort: never show a red 500 bubble for transient model issues
     return NextResponse.json(
-      { error: error.message || "An error occurred while processing your request." },
-      { status: 500 }
+      { response: friendlyFallbackMessage(), intent: "" },
+      { status: 200 }
     );
   }
 }
