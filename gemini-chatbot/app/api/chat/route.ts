@@ -4,6 +4,13 @@ import { loadAllContextFiles } from "../../utils/contextLoader";
 import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
 
 export const runtime = "nodejs";
+const OR_API_KEY = process.env.OPENROUTER_API_KEY;
+const OR_PRIMARY_MODEL = process.env.OR_PRIMARY_MODEL || "google/gemini-2.0-flash-001";
+const OR_FALLBACK_MODEL = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
+
+if (!OR_API_KEY) {
+  console.warn("[WARN] Missing OPENROUTER_API_KEY — OpenRouter requests will fail");
+}
 
 /* ------------------------------- helpers ------------------------------- */
 
