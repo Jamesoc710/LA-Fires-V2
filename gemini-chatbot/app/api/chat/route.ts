@@ -43,17 +43,22 @@ function toOpenAIStyleMessages(geminiStyleContents: any[]) {
   }));
 }
 
-async function callOpenRouter(model: string, contents: any[]) {
-  const apiKey = process.env.OPENROUTER_API_KEY!;
+
+async function callOpenRouter(model: string, contents: any[], req?: NextRequest) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
   const messages = toOpenAIStyleMessages(contents);
+  const refHost = req?.headers.get("host") || "la-fires-v2.vercel.app"; // preview-safe
+  const referer = `https://${refHost}`;
+
+  console.log("[OpenRouter] attempt", model);
   const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": "https://la-fires-v2.vercel.app",
+      "HTTP-Referer": referer,
       "X-Title": "LA-Fires V2",
     },
     body: JSON.stringify({ model, messages }),
@@ -61,28 +66,32 @@ async function callOpenRouter(model: string, contents: any[]) {
 
   if (!r.ok) {
     const body = await r.text().catch(() => "");
+    console.error("[OpenRouter] HTTP", r.status, "model:", model, "body:", body.slice(0, 400));
     throw new Error(`OpenRouter ${r.status}: ${body}`);
   }
-  const j = await r.json();
-  const text = j?.choices?.[0]?.message?.content ?? "";
+
+  const json = await r.json();
+  const text = json?.choices?.[0]?.message?.content ?? "";
+  console.log("[OpenRouter] OK", model, "len:", text.length);
   if (!text) throw new Error("Empty response from OpenRouter");
   return text.trim();
 }
 
-async function orWithRetryAndFallback(contents: any[]) {
+// in orWithRetryAndFallback signature + call sites
+async function orWithRetryAndFallback(contents: any[], req: NextRequest) {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-2.0-flash-001";
   const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
-  const plans: [string, number][] = [[PRIMARY, 3], [FALLBACK, 2]];
+  const plans: [string, number][] = [[PRIMARY, 2], [FALLBACK, 1]];
 
   for (const [model, tries] of plans) {
     for (let i = 1; i <= tries; i++) {
-      try {
-        return await callOpenRouter(model, contents);
-      } catch (e: any) {
-        const retriable = /(?:429|503|5\d\d|network|timeout|fetch|rate)/i.test(String(e?.message || e));
+      try { return await callOpenRouter(model, contents, req); }
+      catch (e: any) {
+        const msg = String(e?.message || e);
+        const retriable = /(?:429|5\d\d|timeout|network|fetch|rate|busy)/i.test(msg);
+        console.warn(`[OpenRouter] attempt failed (${model} try ${i}):`, msg.slice(0, 200));
         if (!retriable || i === tries) break;
-        const delay = Math.min(8000, Math.round(500 * 2 ** (i - 1) * (0.5 + Math.random())));
-        await sleep(delay);
+        await sleep(Math.min(6000, 600 * 2 ** (i - 1)));
       }
     }
   }
@@ -98,6 +107,10 @@ function friendlyFallbackMessage() {
 export async function POST(request: NextRequest) {
   try {
     noStore();
+    console.log("[ENV] OR key:", !!process.env.OPENROUTER_API_KEY,
+            "primary:", process.env.OR_PRIMARY_MODEL,
+            "fallback:", process.env.OR_FALLBACK_MODEL);
+
 
     const { messages } = await request.json();
     if (!messages || !Array.isArray(messages)) {
@@ -129,8 +142,9 @@ Respond with only the improved question, nothing else.` }],
       customLiteSystemPrompt,
       { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
     ];
-    let intent = "";
-    try { intent = await orWithRetryAndFallback(intentPrompt); } catch { intent = ""; }
+ let intent = "";
+ try { intent = await orWithRetryAndFallback(intentPrompt, request); } catch { intent = ""; }
+
 
     // --- Step 2: live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
@@ -207,12 +221,9 @@ ${contextData}`.trim() }] },
     ];
 
     // --- Step 4: final model call via OpenRouter with fallback ---
-    let text = "";
-    try {
-      text = await orWithRetryAndFallback(combinedPrompt);
-    } catch {
-      text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
-    }
+   let text = "";
+   try { text = await orWithRetryAndFallback(combinedPrompt, request); }
+   catch { text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage(); }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
   } catch (error: any) {
