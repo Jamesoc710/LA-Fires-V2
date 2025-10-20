@@ -128,12 +128,6 @@ function parseAssistantText(text: string): ParsedReply | null {
   return parsed.zoning || parsed.overlays || parsed.assessor ? parsed : { ...parsed, raw: text };
 }
 
-
-  // If nothing structured was found, fall back to null -> render raw markdown
-  const hasAny = parsed.zoning || parsed.overlays || parsed.assessor;
-  return hasAny ? parsed : { ...parsed, raw: text };
-}
-
 /* -------------------------------- UI bits -------------------------------- */
 
 function Chip({ children }: { children: React.ReactNode }) {
