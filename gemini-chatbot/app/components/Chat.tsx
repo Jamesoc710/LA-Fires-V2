@@ -34,16 +34,37 @@ type ParsedReply = {
   overlays?: SectionData;
   assessor?: SectionData;
 };
+type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
+
+function sectionKindFrom(line: string): SectionKind {
+  const s = line.trim().toLowerCase().replace(/\*\*/g, '');
+  // ignore “section: unknown”
+  if (/^section\s*:\s*unknown\b/.test(s)) return null;
+
+  // accept "section: zoning", "zoning:", "zoning"
+  if (/^(section\s*:\s*)?zoning\s*:?\s*$/.test(s)) return 'zoning';
+  if (/^(section\s*:\s*)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
+  if (/^(section\s*:\s*)?assessor\s*:?\s*$/.test(s)) return 'assessor';
+  return null;
+}
+
 
 function extractKV(line: string): [string, string] | null {
-  // Handles formats like: KEY: value   or   **KEY:** value
-  const m = line
-    .replace(/^\*\*|\*\*$/g, '')              // strip paired bold if present
-    .replace(/\*\*/g, '')                     // strip any stray **
-    .match(/^\s*([A-Za-z0-9_./\s]+?):\s*(.+)$/);
+  // strip leading bullet or dash and stray bold
+  const cleaned = line
+    .replace(/^\s*[-*]\s*/, '')
+    .replace(/^\s*\*\*|\*\*\s*$/g, '')
+    .trim();
+
+  // match KEY: value  (allow spaces, slashes, dots, underscores)
+  const m = cleaned.match(/^([A-Za-z0-9_./\s]+?):\s*(.+)$/);
   if (!m) return null;
-  return [m[1].trim(), m[2].trim()];
+
+  const key = m[1].trim();
+  const val = m[2].trim();
+  return key && val ? [key, val] : null;
 }
+
 
 function normalizeKey(k: string) {
   return k
@@ -71,31 +92,42 @@ function parseAssistantText(text: string): ParsedReply | null {
   const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
 
   const parsed: ParsedReply = { raw: text };
-  // Try to grab APN/AIN anywhere in the text
-  const ain = text.match(/\bAIN[:\s-]*([0-9]{10})\b/i)?.[1];
-  const apn =
-    text.match(/\bAPN[:\s-]*([0-9]{4}[-\s]?[0-9]{3}[-\s]?[0-9]{3})\b/i)?.[1]
-      ?.replace(/\s/g, '');
-  if (ain) parsed.ain = ain;
-  if (apn) parsed.apn = apn;
 
-  // Walk headings and capture blocks
+  // Try to capture APN/AIN from anywhere
+  const ain = text.match(/\bAIN[:\s-]*([0-9]{10})\b/i)?.[1];
+  const apnRaw = text.match(/\bAPN[:\s-]*([0-9]{4}[-\s]?[0-9]{3}[-\s]?[0-9]{3})\b/i)?.[1];
+  if (ain) parsed.ain = ain;
+  if (apnRaw) parsed.apn = apnRaw.replace(/\s/g, '');
+
+  // Walk through lines, carving out sections
   for (let i = 0; i < lines.length; i++) {
-    const h = lines[i].trim().toLowerCase();
-    if (h === 'zoning') {
-      const { end, data } = takeSection(lines, i);
-      parsed.zoning = data;
-      i = end - 1;
-    } else if (h === 'overlays') {
-      const { end, data } = takeSection(lines, i);
-      parsed.overlays = data;
-      i = end - 1;
-    } else if (h === 'assessor') {
-      const { end, data } = takeSection(lines, i);
-      parsed.assessor = data;
-      i = end - 1;
+    const kind = sectionKindFrom(lines[i]);
+    if (!kind) continue;
+
+    const data: SectionData = {};
+    let j = i + 1;
+    while (j < lines.length && sectionKindFrom(lines[j]) === null) {
+      const kv = extractKV(lines[j]);
+      if (kv) {
+        const [k, v] = kv;
+        data[normalizeKey(k)] = v;
+      }
+      j++;
     }
+
+    if (Object.keys(data).length) {
+      if (kind === 'zoning') parsed.zoning = data;
+      if (kind === 'overlays') parsed.overlays = data;
+      if (kind === 'assessor') parsed.assessor = data;
+    }
+
+    i = j - 1; // continue after the section we just consumed
   }
+
+  // If nothing structured, keep raw
+  return parsed.zoning || parsed.overlays || parsed.assessor ? parsed : { ...parsed, raw: text };
+}
+
 
   // If nothing structured was found, fall back to null -> render raw markdown
   const hasAny = parsed.zoning || parsed.overlays || parsed.assessor;
