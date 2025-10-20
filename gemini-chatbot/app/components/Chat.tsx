@@ -288,7 +288,132 @@ function AssistantBubble({ text, index }: { text: string; index: number }) {
     return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
   };
 
- return (
+return (
+  <div className="w-full max-w-[80%] space-y-3">
+    {/* header row: chips + viewer links + actions */}
+    <div className="flex flex-wrap gap-2 items-center">
+      {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
+      {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
+
+      {/* viewer links */}
+      {parsed?.ain && (
+        <a
+          href={assessorParcelUrl(parsed.ain)}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+          title="Open Assessor Portal"
+        >
+          Assessor ↗
+        </a>
+      )}
+      <a
+        href={znetViewerUrl()}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+        title="Open ZNET Viewer"
+      >
+        ZNET ↗
+      </a>
+      <a
+        href={gisnetViewerUrl()}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+        title="Open GISNET"
+      >
+        GISNET ↗
+      </a>
+
+      {/* actions for this reply */}
+      <div className="ml-auto flex gap-2">
+        <button
+          type="button"
+          onClick={() => navigator.clipboard.writeText(buildCopyAll()).catch(() => {})}
+          className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+          title="Copy this reply"
+        >
+          Copy all
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            const toExport = {
+              apn: parsed?.apn ?? null,
+              ain: parsed?.ain ?? null,
+              zoning: parsed?.zoning ?? null,
+              overlays: parsed?.overlays ?? null,
+              assessor: parsed?.assessor ?? null,
+              raw: parsed?.raw ?? text,
+            };
+            downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
+          }}
+          className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+          title="Download JSON"
+        >
+          Download JSON
+        </button>
+      </div>
+    </div>
+
+    {/* structured cards */}
+    {parsed?.zoning && (
+      <SectionCard
+        title="Zoning"
+        data={parsed.zoning}
+        onCopy={() => {
+          const block = Object.entries(parsed.zoning!)
+            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+            .join('\n');
+          navigator.clipboard.writeText(`Zoning\n${block}`).catch(() => {});
+        }}
+      />
+    )}
+    {parsed?.overlays && (
+      <SectionCard
+        title="Overlays"
+        data={parsed.overlays}
+        onCopy={() => {
+          const block = Object.entries(parsed.overlays!)
+            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+            .join('\n');
+          navigator.clipboard.writeText(`Overlays\n${block}`).catch(() => {});
+        }}
+      />
+    )}
+    {parsed?.assessor && (
+      <SectionCard
+        title="Assessor"
+        data={parsed.assessor}
+        onCopy={() => {
+          const block = Object.entries(parsed.assessor!)
+            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+            .join('\n');
+          navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
+        }}
+      />
+    )}
+
+    {/* raw toggle */}
+    <button
+      type="button"
+      onClick={() => setShowRawForIndex(showRaw ? null : index)}
+      className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
+    >
+      {showRaw ? 'Hide raw text' : 'Show raw text'}
+    </button>
+
+    {showRaw && (
+      <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+        <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
+      </div>
+    )}
+  </div>
+);
+}
+return (
   <div className="flex flex-col flex-1 min-h-0">
     {/* scrolling message area */}
     <div
@@ -317,14 +442,8 @@ function AssistantBubble({ text, index }: { text: string; index: number }) {
           <div className="max-w-[70%] rounded-lg p-3 bg-gray-200 text-gray-800">
             <div className="flex space-x-2 items-center">
               <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" />
-              <div
-                className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
-                style={{ animationDelay: '0.2s' }}
-              />
-              <div
-                className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"
-                style={{ animationDelay: '0.4s' }}
-              />
+              <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+              <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
             </div>
           </div>
         </div>
@@ -379,7 +498,7 @@ function AssistantBubble({ text, index }: { text: string; index: number }) {
           value={input}
           onKeyDown={handleKeyDown}
           onChange={e => setInput(e.target.value)}
-          disabled={isLoading}  /* prevent typing while model is responding */
+          disabled={isLoading}
           placeholder="Ask about zoning, assessor, overlays…"
           className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
         />
@@ -397,3 +516,5 @@ function AssistantBubble({ text, index }: { text: string; index: number }) {
     </form>
   </div>
 );
+  
+}
