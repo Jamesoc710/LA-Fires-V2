@@ -5,6 +5,24 @@ import { Message } from '../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+// NEW: viewer links (safe to import client-side; they’re static urls)
+import {
+  assessorParcelUrl,
+  znetViewerUrl,
+  gisnetViewerUrl,
+} from '@/lib/la/endpoints';
+
+// NEW: simple file download
+function downloadFile(filename: string, contents: string, mime = 'application/json') {
+  const blob = new Blob([contents], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ------------ tiny utils to parse our assistant text into sections ----------- */
 
 type SectionData = Record<string, string>;
@@ -135,14 +153,41 @@ function SectionCard({
 
 /* ----------------------------- Chat component ---------------------------- */
 
-export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([
+const [messages, setMessages] = useState<Message[]>([
+  { role: 'assistant', content: "Hi there! I'm here to help you navigate Los Angeles building codes. What part of your project can I assist with today?" },
+]);
+
+// rehydrate from localStorage on first mount
+useEffect(() => {
+  try {
+    const saved = localStorage.getItem('lafires.chat');
+    if (saved) {
+      const parsed = JSON.parse(saved) as Message[];
+      if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+    }
+  } catch {}
+}, []);
+
+// persist whenever messages change (cap length for safety)
+useEffect(() => {
+  try {
+    const capped = messages.slice(-50);
+    localStorage.setItem('lafires.chat', JSON.stringify(capped));
+  } catch {}
+}, [messages]);
+
+// clear chat (keeps the greeting)
+function clearChat() {
+  setMessages([
     {
       role: 'assistant',
       content:
         "Hi there! I'm here to help you navigate Los Angeles building codes. What part of your project can I assist with today?",
     },
   ]);
+  localStorage.removeItem('lafires.chat');
+}
+
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,162 +245,169 @@ export default function Chat() {
     }
   };
 
-  function AssistantBubble({ text, index }: { text: string; index: number }) {
-    const parsed = useMemo(() => parseAssistantText(text), [text]);
-    const hasStructure = parsed && (parsed.zoning || parsed.overlays || parsed.assessor);
+function AssistantBubble({ text, index }: { text: string; index: number }) {
+  const parsed = useMemo(() => parseAssistantText(text), [text]);
+  const hasStructure = parsed && (parsed.zoning || parsed.overlays || parsed.assessor);
+  const showRaw = showRawForIndex === index;
 
-    if (!hasStructure) {
-      // fallback: render original markdown bubble
-      return (
-        <div className="max-w-[70%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-        </div>
-      );
-    }
-
-    const copySection = (title: string, data?: SectionData) => {
-      if (!data) return;
-      const block = `${title}\n` + Object.entries(data).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join('\n');
-      navigator.clipboard.writeText(block).catch(() => {});
-    };
-
-    const assessorLink =
-      parsed?.ain ? `https://portal.assessor.lacounty.gov/parceldetail/${parsed.ain}` : undefined;
-
-    const showRaw = showRawForIndex === index;
-
+  // Fallback: render plain markdown if we didn't parse any sections
+  if (!hasStructure) {
     return (
-      <div className="w-full max-w-[80%] space-y-3">
-        {/* context chips */}
-        {(parsed?.apn || parsed?.ain) && (
-          <div className="flex flex-wrap gap-2">
-            {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
-            {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
-            {assessorLink && (
-              <a
-                href={assessorLink}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-              >
-                Assessor Portal ↗
-              </a>
-            )}
-          </div>
-        )}
-
-        {parsed?.zoning && (
-          <SectionCard title="Zoning" data={parsed.zoning} onCopy={() => copySection('Zoning', parsed.zoning)} />
-        )}
-        {parsed?.overlays && (
-          <SectionCard
-            title="Overlays"
-            data={parsed.overlays}
-            onCopy={() => copySection('Overlays', parsed.overlays)}
-          />
-        )}
-        {parsed?.assessor && (
-          <SectionCard
-            title="Assessor"
-            data={parsed.assessor}
-            onCopy={() => copySection('Assessor', parsed.assessor)}
-          />
-        )}
-
-        {/* raw toggle */}
-        <button
-          type="button"
-          onClick={() => setShowRawForIndex(showRaw ? null : index)}
-          className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
-        >
-          {showRaw ? 'Hide raw text' : 'Show raw text'}
-        </button>
-
-        {showRaw && (
-          <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
-            <pre className="whitespace-pre-wrap text-xs">{parsed?.raw}</pre>
-          </div>
-        )}
+      <div className="max-w-[70%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>
     );
   }
 
+  // Build “copy all” text quickly (sections if present, else raw)
+  const buildCopyAll = () => {
+    const blocks: string[] = [];
+    if (parsed?.zoning) {
+      blocks.push('Zoning');
+      blocks.push(
+        ...Object.entries(parsed.zoning).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+      );
+      blocks.push('');
+    }
+    if (parsed?.overlays) {
+      blocks.push('Overlays');
+      blocks.push(
+        ...Object.entries(parsed.overlays).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+      );
+      blocks.push('');
+    }
+    if (parsed?.assessor) {
+      blocks.push('Assessor');
+      blocks.push(
+        ...Object.entries(parsed.assessor).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+      );
+    }
+    return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
+  };
+
   return (
-    <div className="flex flex-col flex-1 min-h-0">
-      <div
-        className="flex-1 overflow-auto p-4 space-y-4 pb-16"
-        style={{ paddingBottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
-      >
-        {messages.map((message, index) => (
-          <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            {message.role === 'user' ? (
-              <div className="max-w-[70%] rounded-xl p-4 shadow-md bg-blue-500 text-white">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              </div>
-            ) : (
-              <AssistantBubble text={message.content} index={index} />
-            )}
-          </div>
-        ))}
+    <div className="w-full max-w-[80%] space-y-3">
+      {/* Header row: chips + viewer links + actions */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
+        {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
 
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="max-w-[70%] rounded-lg p-3 bg-gray-200 text-gray-800">
-              <div className="flex space-x-2 items-center">
-                <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="flex justify-center">
-            <div className="max-w-[70%] rounded-lg p-3 bg-red-100 text-red-800">Error: {error}</div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* suggestions */}
-      <div className="px-4 pb-2 space-x-2">
-        {suggestions.map(s => (
-          <button
-            key={s}
-            onClick={() => setInput(s)}
-            className="mb-2 rounded-full px-3 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-600"
+        {/* Viewer links */}
+        {parsed?.ain && (
+          <a
+            href={assessorParcelUrl(parsed.ain)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            title="Open in Assessor Portal"
           >
-            {s}
+            Assessor ↗
+          </a>
+        )}
+        <a
+          href={znetViewerUrl()}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+          title="Open ZNET Viewer"
+        >
+          ZNET ↗
+        </a>
+        <a
+          href={gisnetViewerUrl()}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+          title="Open GISNET"
+        >
+          GISNET ↗
+        </a>
+
+        {/* Actions for this reply */}
+        <div className="ml-auto flex gap-2">
+          <button
+            type="button"
+            onClick={() => navigator.clipboard.writeText(buildCopyAll()).catch(() => {})}
+            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            title="Copy this reply"
+          >
+            Copy all
           </button>
-        ))}
-      </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="border-t p-4 sticky bg-white dark:bg-slate-900 z-10"
-        style={{ bottom: 'env(safe-area-inset-bottom)' }}
-      >
-        <div className="flex space-x-2">
-          <input
-            type="text"
-            value={input}
-            onKeyDown={handleKeyDown}
-            onChange={e => setInput(e.target.value)}
-            placeholder="Ask about zoning, assessor, overlays…"
-            className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
           <button
-            type="submit"
-            disabled={isLoading || !input.trim()}
-            className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+            type="button"
+            onClick={() => {
+              const toExport = {
+                apn: parsed?.apn ?? null,
+                ain: parsed?.ain ?? null,
+                zoning: parsed?.zoning ?? null,
+                overlays: parsed?.overlays ?? null,
+                assessor: parsed?.assessor ?? null,
+                raw: parsed?.raw ?? text,
+              };
+              downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
+            }}
+            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            title="Download JSON"
           >
-            Send
+            Download JSON
           </button>
         </div>
-        <p className="mt-1 text-[11px] text-slate-500">Press Enter to send • Shift+Enter for a new line</p>
-      </form>
+      </div>
+
+      {/* Structured cards */}
+      {parsed?.zoning && (
+        <SectionCard
+          title="Zoning"
+          data={parsed.zoning}
+          onCopy={() => {
+            const block = Object.entries(parsed.zoning!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Zoning\n${block}`).catch(() => {});
+          }}
+        />
+      )}
+      {parsed?.overlays && (
+        <SectionCard
+          title="Overlays"
+          data={parsed.overlays}
+          onCopy={() => {
+            const block = Object.entries(parsed.overlays!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Overlays\n${block}`).catch(() => {});
+          }}
+        />
+      )}
+      {parsed?.assessor && (
+        <SectionCard
+          title="Assessor"
+          data={parsed.assessor}
+          onCopy={() => {
+            const block = Object.entries(parsed.assessor!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
+          }}
+        />
+      )}
+
+      {/* Raw toggle */}
+      <button
+        type="button"
+        onClick={() => setShowRawForIndex(showRaw ? null : index)}
+        className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
+      >
+        {showRaw ? 'Hide raw text' : 'Show raw text'}
+      </button>
+
+      {showRaw && (
+        <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+          <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
+        </div>
+      )}
     </div>
   );
 }
+
