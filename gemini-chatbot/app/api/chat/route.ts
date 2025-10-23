@@ -35,25 +35,20 @@ function extractAddress(s: string): string | undefined {
 }
 
 function wantsZoningSection(s: string) {
-  const q = s.toLowerCase();
-  return /\bzoning\b|\bzone\b|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
+    const q = s.toLowerCase();
+    // If they mention a parcel ID, they almost always want the zoning for it.
+    return /\bzoning\b|\bzone\b|apn|ain|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
 }
 function wantsOverlaysSection(s: string) {
-  const q = s.toLowerCase();
-  // broader matcher, accept overlay(s) term and other overlay-like tokens
-  return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
+    const q = s.toLowerCase();
+    // broader matcher, accept overlay(s) term and other overlay-like tokens
+    return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
 }
 function wantsAssessorSection(s: string) {
-  // Narrowed: do NOT trigger on APN/AIN. Only real assessor-related keywords.
-  const q = s.toLowerCase();
-  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
+    // Narrowed: do NOT trigger on APN/AIN alone. Only real assessor-related keywords.
+    const q = s.toLowerCase();
+    return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
 }
-
-
-
-
-
-
 
 
 /* ---------------- OpenRouter primary + fallback ---------------- */
@@ -185,9 +180,13 @@ let SHOW_ZONING   = wantsZoningSection(qForIntent);
 let SHOW_OVERLAYS = wantsOverlaysSection(qForIntent);
 let SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
 
-// If none matched, treat as a broad question => show everything
-if (!SHOW_ZONING && !SHOW_OVERLAYS && !SHOW_ASSESSOR) {
-  SHOW_ZONING = SHOW_OVERLAYS = SHOW_ASSESSOR = true;
+// **CRITICAL FIX**: If a specific term like 'zoning' or 'overlays' is used,
+// be exclusive. A query for "zoning" should not also trigger assessor.
+const hasSpecificTerm = /\b(zoning|zone|overlays?|assessor)\b/i.test(qForIntent);
+if (hasSpecificTerm) {
+    SHOW_ZONING = /\b(zoning|zone)\b/i.test(qForIntent);
+    SHOW_OVERLAYS = /\boverlays?\b/i.test(qForIntent);
+    SHOW_ASSESSOR = wantsAssessorSection(qForIntent); // keep the more detailed check here
 }
 
 console.log("[CHAT] hasZoning:", SHOW_ZONING, "hasOverlays:", SHOW_OVERLAYS, "hasAssessor:", SHOW_ASSESSOR);
@@ -270,7 +269,8 @@ const customSystemPrompt = {
 `If a section has no data in TOOL OUTPUTS, print "Section: Unknown" and continue.
 Do NOT include any section whose SHOW_* flag is false.
 Do NOT use Markdown formatting.
-Focus on the most relevant facts only (e.g., zoning code, description, category, planning area; assessor situs address, living area, year built).`
+Focus on the most relevant facts only (e.g., zoning code, description, category, planning area; assessor situs address, living area, year built).
+If all SHOW flags are false, respond that you need more specific instructions on what to look for.`
   }],
 };
 
