@@ -19,35 +19,35 @@ function wantsParcelLookup(s: string) {
   // include both singular and plural overlay tokens
   return digits.length >= 9 || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s);
 }
-function wantsOverlay(s: string) {
-  // accept 'overlay' and 'overlays'
-  return /\boverlays?\b|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
-}
+
 function extractApn(s: string): string | undefined {
   const digits = s.replace(/\D/g, "");
   if (digits.length === 10) return digits;
   const m = s.match(/\b(\d{4}[-\s]?\d{3}[-\s]?\d{3})\b/);
   return m ? m[1].replace(/\D/g, "") : undefined;
 }
+
 function extractAddress(s: string): string | undefined {
   if (/\d{3,5}\s+\w+/.test(s || "")) return s.trim();
   return undefined;
 }
 
 function wantsZoningSection(s: string) {
-    const q = s.toLowerCase();
-    // If they mention a parcel ID, they almost always want the zoning for it.
-    return /\bzoning\b|\bzone\b|apn|ain|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
+  const q = s.toLowerCase();
+  // If they mention a parcel ID, they almost always want the zoning for it.
+  return /\bzoning\b|\bzone\b|apn|ain|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
 }
+
 function wantsOverlaysSection(s: string) {
-    const q = s.toLowerCase();
-    // broader matcher, accept overlay(s) term and other overlay-like tokens
-    return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
+  const q = s.toLowerCase();
+  // broader matcher, accept overlay(s) term and other overlay-like tokens
+  return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
 }
+
 function wantsAssessorSection(s: string) {
-    // Narrowed: do NOT trigger on APN/AIN alone. Only real assessor-related keywords.
-    const q = s.toLowerCase();
-    return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
+  // Narrowed: do NOT trigger on APN/AIN alone. Only real assessor-related keywords.
+  const q = s.toLowerCase();
+  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
 }
 
 
@@ -102,7 +102,6 @@ async function callOpenRouter(
 }
 
 
-// in orWithRetryAndFallback signature + call sites
 async function orWithRetryAndFallback(contents: any[], req: NextRequest, temperature = 0.2) {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-2.0-flash-001";
   const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
@@ -134,207 +133,132 @@ function friendlyFallbackMessage() {
 export async function POST(request: NextRequest) {
   try {
     noStore();
-    console.log("[ENV] OR key:", !!process.env.OPENROUTER_API_KEY,
-            "primary:", process.env.OR_PRIMARY_MODEL,
-            "fallback:", process.env.OR_FALLBACK_MODEL);
-
-
     const { messages } = await request.json();
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: "Invalid request. Messages must be an array." }, { status: 400 });
     }
 
     const contextData = await loadAllContextFiles();
+    const lastUser = messages[messages.length - 1]?.content || "";
+    const intent = lastUser; // Use raw user input for intent
 
-    // --- Step 1: refine intent (OpenRouter, Gemini 2.0 Flash Lite) ---
-    const customLiteSystemPrompt = {
-      role: "user",
-      parts: [{ text:
-`You are tasked with refining the user's inputted question about Los Angeles building codes.
+    // --- Step 1b: decide which sections to render based on intent ---
+    const qForIntent = intent.toLowerCase();
 
-Your goal is to:
-- Make the question as clear, specific, and precise as possible.
-- Keep the original intent and meaning.
-- Eliminate vague or ambiguous wording.
-- If necessary, add brief clarifications.
+    let SHOW_ZONING   = false;
+    let SHOW_OVERLAYS = false;
+    let SHOW_ASSESSOR = false;
 
-Important:
-- Do not change the meaning of the user's original question.
-- Do not answer the question.
-- Only return the refined and clarified version of the question.
+    // More precise intent detection:
+    const hasSpecificTerm = /\b(zoning|zone|overlays?|assessor)\b/i.test(qForIntent);
 
-Respond with only the improved question, nothing else.` }],
-    };
-    const intentPrompt = [
-      customLiteSystemPrompt,
-      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-    ];
-let intent = "";
-try { intent = await orWithRetryAndFallback(intentPrompt, request, 0.1); } catch { intent = ""; }
-
-// --- Step 1b: decide which sections to render based on intent+query ---
-const lastUser = messages[messages.length - 1]?.content || "";
-const qForIntent = `${intent} ${lastUser}`.trim();
-
-let SHOW_ZONING   = wantsZoningSection(qForIntent);
-let SHOW_OVERLAYS = wantsOverlaysSection(qForIntent);
-let SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
-
-// **CRITICAL FIX**: If a specific term like 'zoning' or 'overlays' is used,
-// be exclusive. A query for "zoning" should not also trigger assessor.
-const hasSpecificTerm = /\b(zoning|zone|overlays?|assessor)\b/i.test(qForIntent);
-if (hasSpecificTerm) {
-    SHOW_ZONING = /\b(zoning|zone)\b/i.test(qForIntent);
-    SHOW_OVERLAYS = /\boverlays?\b/i.test(qForIntent);
-    SHOW_ASSESSOR = wantsAssessorSection(qForIntent); // keep the more detailed check here
-}
-
-console.log("[CHAT] hasZoning:", SHOW_ZONING, "hasOverlays:", SHOW_OVERLAYS, "hasAssessor:", SHOW_ASSESSOR);
-
-// --- Step 2: live lookups (TOOL OUTPUTS) ---
-let toolContext = "";
-try {
-  const lastUser = messages[messages.length - 1]?.content || "";
-  if (wantsParcelLookup(lastUser)) {
-    const apn = extractApn(lastUser);
-    const address = extractAddress(lastUser);
-
-    if (apn) {
-      // only call the fetchers if the SHOW_* flags are true
-      const [zRes, aRes, oRes] = await Promise.allSettled([
-        SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
-        SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
-        SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
-      ]);
-
-      console.log("[CHAT] fetch results:",
-        "zoning:", SHOW_ZONING ? (zRes as any).status : "skipped",
-        "assessor:", SHOW_ASSESSOR ? (aRes as any).status : "skipped",
-        "overlays:", SHOW_OVERLAYS ? (oRes as any).status : "skipped"
-      );
-
-      if (SHOW_ZONING && (zRes as any).status === "fulfilled" && (zRes as any).value) {
-        toolContext += `\n[TOOL:zoning]\n${JSON.stringify((zRes as any).value, null, 2)}`;
-      } else if (SHOW_ZONING && (zRes as any).status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:zoning] ${String((zRes as any).reason)}`;
-      }
-
-      if (SHOW_ASSESSOR && (aRes as any).status === "fulfilled" && (aRes as any).value) {
-        toolContext += `\n[TOOL:assessor]\n${JSON.stringify((aRes as any).value, null, 2)}`;
-      } else if (SHOW_ASSESSOR && (aRes as any).status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:assessor] ${String((aRes as any).reason)}`;
-      }
-
-      if (SHOW_OVERLAYS && (oRes as any).status === "fulfilled" && (oRes as any).value) {
-        toolContext += `\n[TOOL:overlays]\n${JSON.stringify((oRes as any).value, null, 2)}`;
-      } else if (SHOW_OVERLAYS && (oRes as any).status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:overlays] ${String((oRes as any).reason)}`;
-      }
-
-    } else if (address) {
-      toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+    if (hasSpecificTerm) {
+      // If a specific keyword is used, only show that section.
+      SHOW_ZONING = /\b(zoning|zone)\b/i.test(qForIntent);
+      SHOW_OVERLAYS = /\boverlays?\b/i.test(qForIntent);
+      SHOW_ASSESSOR = wantsAssessorSection(qForIntent); // This one is already specific
     } else {
-      toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+      // If no specific term, check for broader indicators.
+      // A query with an APN/AIN and no other specifier implies zoning.
+      if (wantsParcelLookup(qForIntent)) {
+        SHOW_ZONING = true;
+      }
     }
-  }
-} catch (e) {
-  toolContext += `\n[TOOL_ERROR] ${String(e)}`;
-}
+
+    console.log("[CHAT] Flags:", { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
+
+    // --- Step 2: live lookups (TOOL OUTPUTS) ---
+    let toolContext = "";
+    try {
+      if (wantsParcelLookup(lastUser)) {
+        const apn = extractApn(lastUser);
+        const address = extractAddress(lastUser);
+
+        if (apn) {
+          const [zRes, aRes, oRes] = await Promise.allSettled([
+            SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
+            SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
+            SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+          ]);
+
+          if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
+            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
+          }
+          if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
+            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+          }
+          if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
+            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+          }
+        } else if (address) {
+          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+        } else {
+          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+        }
+      }
+    } catch (e) {
+      toolContext += `\n[TOOL_ERROR] ${String(e)}`;
+    }
 
     console.log("[CHAT] toolContext length:", toolContext.length);
 
-    // --- Step 3: build prompts with tools first (unchanged) ---
-const systemPreamble = `
+    // --- Step 3: build prompts with tools first ---
+    const systemPreamble = `
 You are LA-Fires Assistant.
-
 Rules:
 - Use TOOL OUTPUTS as the single source of truth when present.
 - Render ONLY the sections whose flags are true.
-- If a flagged section has no tool data, output exactly:
-Zoning
-Section: Unknown
-(or the appropriate section heading, e.g., Overlays / Assessor)
+- If a flagged section has no tool data, output exactly: <Section Heading>\nSection: Unknown
 - Never include any section that is not flagged.
-- Output plain text only (no Markdown, no **bold**, no lists, no code fences).
-- Valid section headings are exactly: "Zoning", "Overlays", "Assessor".
-- Inside each shown section, print concise KEY: VALUE lines.
-- Recommended order: Zoning, Overlays, Assessor.
-- For Zoning, include ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and TITLE_22 when available.
+- Output plain text only (no Markdown).
+- Valid headings: Zoning, Overlays, Assessor.
+- Inside a section, print concise KEY: VALUE lines.
+- Order: Zoning, Overlays, Assessor.
 `.trim();
 
-const customSystemPrompt = {
-  role: "user",
-  parts: [{
-    text:
-`If a section has no data in TOOL OUTPUTS, print "Section: Unknown" and continue.
-Do NOT include any section whose SHOW_* flag is false.
-Do NOT use Markdown formatting.
-Focus on the most relevant facts only (e.g., zoning code, description, category, planning area; assessor situs address, living area, year built).
-If all SHOW flags are false, respond that you need more specific instructions on what to look for.`
-  }],
-};
+    const customSystemPrompt = {
+      role: "user",
+      parts: [{
+        text: `Do NOT include any section whose SHOW_* flag is false. If all flags are false, ask the user to be more specific.`
+      }],
+    };
 
-
-const combinedPrompt = [
-  { role: "user", parts: [{ text: systemPreamble }] },
-  customSystemPrompt,
-
-  // NEW: explicit control flags
-  { role: "user", parts: [{ text:
-`CONTROL FLAGS
-SHOW_ZONING: ${String(SHOW_ZONING)}
-SHOW_OVERLAYS: ${String(SHOW_OVERLAYS)}
-SHOW_ASSESSOR: ${String(SHOW_ASSESSOR)}`
-  }] },
-
-  // Keep intent (helps disambiguate)
-  { role: "user", parts: [{ text: `Intent: ${intent}` }] },
-
-  // Tools and context (unchanged)
-  { role: "user", parts: [{ text:
-`=== TOOL OUTPUTS (authoritative) ===
-${toolContext || "(none)"}
-
-=== STATIC CONTEXT (supporting) ===
-${contextData}`.trim() }] },
-
-  // Original user message
-  { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-];
-
+    const combinedPrompt = [
+      { role: "user", parts: [{ text: systemPreamble }] },
+      customSystemPrompt,
+      { role: "user", parts: [{ text: `CONTROL FLAGS\nSHOW_ZONING: ${SHOW_ZONING}\nSHOW_OVERLAYS: ${SHOW_OVERLAYS}\nSHOW_ASSESSOR: ${SHOW_ASSESSOR}` }] },
+      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+      { role: "user", parts: [{ text: `=== TOOL OUTPUTS (authoritative) ===\n${toolContext || "(none)"}\n\n=== STATIC CONTEXT (supporting) ===\n${contextData}`.trim() }] },
+      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+    ];
 
     // --- Step 4: final model call via OpenRouter with fallback ---
-   let text = "";
-   try { 
-     // lower temperature to 0.1 to reduce creative drift
-     text = await orWithRetryAndFallback(combinedPrompt, request, 0.1); 
-   }
-   catch { 
-     text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage(); 
-   }
+    let text = "";
+    try {
+      text = await orWithRetryAndFallback(combinedPrompt, request, 0.1);
+    } catch {
+      text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
+    }
 
-   // Defensive post-filter: remove any section the model produced that wasn't flagged
-   try {
-     if (text) {
-       const removeSection = (input: string, heading: string) => {
-         const re = new RegExp(`(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`, "gi");
-         return input.replace(re, "");
-       };
-       if (!SHOW_ZONING) text = removeSection(text, "Zoning");
-       if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
-       if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
-       text = text.trim();
-     }
-   } catch (e) {
-     console.warn("[CHAT] post-filter failed:", e);
-   }
+    // Defensive post-filter
+    try {
+      if (text) {
+        const removeSection = (input: string, heading: string) => {
+          const re = new RegExp(`(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`, "gi");
+          return input.replace(re, "");
+        };
+        if (!SHOW_ZONING) text = removeSection(text, "Zoning");
+        if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
+        if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
+        text = text.trim();
+      }
+    } catch (e) {
+      console.warn("[CHAT] post-filter failed:", e);
+    }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
   } catch (error: any) {
     console.error("Error in chat API:", error);
-    return NextResponse.json(
-      { response: friendlyFallbackMessage(), intent: "" },
-      { status: 200 }
-    );
+    return NextResponse.json({ response: friendlyFallbackMessage(), intent: "" }, { status: 200 });
   }
 }
