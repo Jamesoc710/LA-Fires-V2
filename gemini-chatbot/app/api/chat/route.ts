@@ -32,6 +32,26 @@ function extractAddress(s: string): string | undefined {
   return undefined;
 }
 
+function wantsZoningSection(s: string) {
+  const q = s.toLowerCase();
+  return /\bzoning\b|\bzone\b|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
+}
+function wantsOverlaysSection(s: string) {
+  const q = s.toLowerCase();
+  // keep your original wantsOverlay as-is if you like; this one is a bit broader
+  return /\boverlay\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
+}
+function wantsAssessorSection(s: string) {
+  const q = s.toLowerCase();
+  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bain\b|\bapn\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
+}
+
+
+
+
+
+
+
 /* ---------------- OpenRouter primary + fallback ---------------- */
 
 function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
@@ -44,12 +64,17 @@ function toOpenAIStyleMessages(geminiStyleContents: any[]) {
 }
 
 
-async function callOpenRouter(model: string, contents: any[], req?: NextRequest) {
+async function callOpenRouter(
+  model: string,
+  contents: any[],
+  req?: NextRequest,
+  temperature = 0.2
+) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
   const messages = toOpenAIStyleMessages(contents);
-  const refHost = req?.headers.get("host") || "la-fires-v2.vercel.app"; // preview-safe
+  const refHost = req?.headers.get("host") || "la-fires-v2.vercel.app";
   const referer = `https://${refHost}`;
 
   console.log("[OpenRouter] attempt", model);
@@ -61,7 +86,7 @@ async function callOpenRouter(model: string, contents: any[], req?: NextRequest)
       "HTTP-Referer": referer,
       "X-Title": "LA-Fires V2",
     },
-    body: JSON.stringify({ model, messages }),
+    body: JSON.stringify({ model, messages, temperature }),
   });
 
   if (!r.ok) {
@@ -77,16 +102,18 @@ async function callOpenRouter(model: string, contents: any[], req?: NextRequest)
   return text.trim();
 }
 
+
 // in orWithRetryAndFallback signature + call sites
-async function orWithRetryAndFallback(contents: any[], req: NextRequest) {
+async function orWithRetryAndFallback(contents: any[], req: NextRequest, temperature = 0.2) {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-2.0-flash-001";
   const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
   const plans: [string, number][] = [[PRIMARY, 2], [FALLBACK, 1]];
 
   for (const [model, tries] of plans) {
     for (let i = 1; i <= tries; i++) {
-      try { return await callOpenRouter(model, contents, req); }
-      catch (e: any) {
+      try {
+        return await callOpenRouter(model, contents, req, temperature);
+      } catch (e: any) {
         const msg = String(e?.message || e);
         const retriable = /(?:429|5\d\d|timeout|network|fetch|rate|busy)/i.test(msg);
         console.warn(`[OpenRouter] attempt failed (${model} try ${i}):`, msg.slice(0, 200));
@@ -97,6 +124,7 @@ async function orWithRetryAndFallback(contents: any[], req: NextRequest) {
   }
   throw new Error("All OpenRouter attempts failed");
 }
+
 
 function friendlyFallbackMessage() {
   return "The AI service is busy right now. I still fetched your zoning/overlays/assessor links—try the AI summary again in a moment.";
@@ -142,8 +170,21 @@ Respond with only the improved question, nothing else.` }],
       customLiteSystemPrompt,
       { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
     ];
- let intent = "";
- try { intent = await orWithRetryAndFallback(intentPrompt, request); } catch { intent = ""; }
+let intent = "";
+try { intent = await orWithRetryAndFallback(intentPrompt, request, 0.1); } catch { intent = ""; }
+
+// --- Step 1b: decide which sections to render based on intent+query ---
+const lastUser = messages[messages.length - 1]?.content || "";
+const qForIntent = `${intent} ${lastUser}`.trim();
+
+let SHOW_ZONING   = wantsZoningSection(qForIntent);
+let SHOW_OVERLAYS = wantsOverlaysSection(qForIntent);
+let SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
+
+// If none matched, treat as a broad question => show everything
+if (!SHOW_ZONING && !SHOW_OVERLAYS && !SHOW_ASSESSOR) {
+  SHOW_ZONING = SHOW_OVERLAYS = SHOW_ASSESSOR = true;
+}
 
 
     // --- Step 2: live lookups (TOOL OUTPUTS) ---
@@ -160,6 +201,12 @@ Respond with only the improved question, nothing else.` }],
             lookupAssessor(apn),
             lookupOverlays(apn),
           ]);
+          const hasZoningData = zRes.status === "fulfilled" && zRes.value && zRes.value.zoning;
+          const hasAssessorData = aRes.status === "fulfilled" && aRes.value && (aRes.value.ain || aRes.value.apn);
+          const hasOverlayData = oRes.status === "fulfilled" && Array.isArray(oRes.value?.overlays) && oRes.value.overlays.some((o: any) => o?.ok);
+
+          console.log("[CHAT] hasZoning:", !!hasZoningData, "hasOverlays:", !!hasOverlayData, "hasAssessor:", !!hasAssessorData);
+
 
           if (zRes.status === "fulfilled") {
             toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
@@ -188,41 +235,63 @@ Respond with only the improved question, nothing else.` }],
     console.log("[CHAT] toolContext length:", toolContext.length);
 
     // --- Step 3: build prompts with tools first (unchanged) ---
-    const systemPreamble = `
+const systemPreamble = `
 You are LA-Fires Assistant.
-If TOOL OUTPUTS exist, you MUST answer using them. Do NOT refuse when tool data is present.
-Prefer TOOL OUTPUTS over any other text. If they are missing, say "**Section: Unknown**" and ask for an APN/AIN if needed.
-For zoning, summarize ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and include TITLE_22 when available.
+
+Rules:
+- Use TOOL OUTPUTS as the single source of truth when present.
+- Prefer TOOL OUTPUTS over any other text. If there is no tool data for a section, output exactly "Section: Unknown" and continue.
+- Output plain text only (no Markdown, no **bold**, no lists, no code fences).
+- Render sections ONLY when their SHOW_* flag is true.
+- Valid section headings are exactly: "Zoning", "Overlays", "Assessor".
+- Inside each shown section, print concise KEY: VALUE lines.
+- Recommended order: Zoning, Overlays, Assessor.
+- For Zoning, include ZONE, Z_DESC, Z_CATEGORY, PLNG_AREA, and TITLE_22 when available.
 `.trim();
 
-    const customSystemPrompt = {
-      role: "user",
-      parts: [{ text:
-`You must include a section heading **only if present** in the provided materials.
-If no section exists (e.g., ArcGIS zoning / assessor results), write "**Section: Unknown**" and continue.
+const customSystemPrompt = {
+  role: "user",
+  parts: [{
+    text:
+`If a section has no data in TOOL OUTPUTS, print "Section: Unknown" and continue.
+Do NOT include any section whose SHOW_* flag is false.
+Do NOT use Markdown formatting.
+Focus on the most relevant facts only (e.g., zoning code, description, category, planning area; assessor situs address, living area, year built).`
+  }],
+};
 
-Instructions:
-- Use TOOL OUTPUTS when provided. They have priority over everything else.
-- Get straight to the relevant facts (zoning code, description, category, planning area; assessor situs address, year built, area).
-- Do not add disclaimers or refuse when tool data is present.` }],
-    };
 
-    const combinedPrompt = [
-      { role: "user", parts: [{ text: systemPreamble }] },
-      customSystemPrompt,
-      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
-      { role: "user", parts: [{ text:
+const combinedPrompt = [
+  { role: "user", parts: [{ text: systemPreamble }] },
+  customSystemPrompt,
+
+  // NEW: explicit control flags
+  { role: "user", parts: [{ text:
+`CONTROL FLAGS
+SHOW_ZONING: ${String(SHOW_ZONING)}
+SHOW_OVERLAYS: ${String(SHOW_OVERLAYS)}
+SHOW_ASSESSOR: ${String(SHOW_ASSESSOR)}`
+  }] },
+
+  // Keep intent (helps disambiguate)
+  { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+
+  // Tools and context (unchanged)
+  { role: "user", parts: [{ text:
 `=== TOOL OUTPUTS (authoritative) ===
 ${toolContext || "(none)"}
 
 === STATIC CONTEXT (supporting) ===
 ${contextData}`.trim() }] },
-      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-    ];
+
+  // Original user message
+  { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+];
+
 
     // --- Step 4: final model call via OpenRouter with fallback ---
    let text = "";
-   try { text = await orWithRetryAndFallback(combinedPrompt, request); }
+   try { text = await orWithRetryAndFallback(combinedPrompt, request, .2); }
    catch { text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage(); }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
