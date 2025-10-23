@@ -43,8 +43,9 @@ function wantsOverlaysSection(s: string) {
 }
 function wantsAssessorSection(s: string) {
   const q = s.toLowerCase();
-  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bain\b|\bapn\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
+  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
 }
+
 
 
 
@@ -187,51 +188,49 @@ if (!SHOW_ZONING && !SHOW_OVERLAYS && !SHOW_ASSESSOR) {
 }
 
 
-    // --- Step 2: live lookups (TOOL OUTPUTS) ---
-    let toolContext = "";
-    try {
-      const lastUser = messages[messages.length - 1]?.content || "";
-      if (wantsParcelLookup(lastUser)) {
-        const apn = extractApn(lastUser);
-        const address = extractAddress(lastUser);
+// --- Step 2: live lookups (TOOL OUTPUTS) ---
+let toolContext = "";
+try {
+  const lastUser = messages[messages.length - 1]?.content || "";
+  if (wantsParcelLookup(lastUser)) {
+    const apn = extractApn(lastUser);
+    const address = extractAddress(lastUser);
 
-        if (apn) {
-          const [zRes, aRes, oRes] = await Promise.allSettled([
-            lookupZoning(apn),
-            lookupAssessor(apn),
-            lookupOverlays(apn),
-          ]);
-          const hasZoningData = zRes.status === "fulfilled" && zRes.value && zRes.value.zoning;
-          const hasAssessorData = aRes.status === "fulfilled" && aRes.value && (aRes.value.ain || aRes.value.apn);
-          const hasOverlayData = oRes.status === "fulfilled" && Array.isArray(oRes.value?.overlays) && oRes.value.overlays.some((o: any) => o?.ok);
+    if (apn) {
+      const [zRes, aRes, oRes] = await Promise.allSettled([
+        SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
+        SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
+        SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+      ]);
 
-          console.log("[CHAT] hasZoning:", !!hasZoningData, "hasOverlays:", !!hasOverlayData, "hasAssessor:", !!hasAssessorData);
-
-
-          if (zRes.status === "fulfilled") {
-            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
-          } else {
-            toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
-          }
-          if (aRes.status === "fulfilled") {
-            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
-          } else {
-            toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
-          }
-          if (oRes.status === "fulfilled") {
-            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
-          } else {
-            toolContext += `\n[TOOL_ERROR:overlays] ${String(oRes.reason)}`;
-          }
-        } else if (address) {
-          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
-        } else {
-          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
-        }
+      if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
+        toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
+      } else if (SHOW_ZONING && zRes.status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
       }
-    } catch (e) {
-      toolContext += `\n[TOOL_ERROR] ${String(e)}`;
+
+      if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
+        toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+      } else if (SHOW_ASSESSOR && aRes.status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
+      }
+
+      if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
+        toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+      } else if (SHOW_OVERLAYS && oRes.status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:overlays] ${String(oRes.reason)}`;
+      }
+
+    } else if (address) {
+      toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+    } else {
+      toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
     }
+  }
+} catch (e) {
+  toolContext += `\n[TOOL_ERROR] ${String(e)}`;
+}
+
     console.log("[CHAT] toolContext length:", toolContext.length);
 
     // --- Step 3: build prompts with tools first (unchanged) ---
