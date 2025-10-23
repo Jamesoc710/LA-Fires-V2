@@ -16,10 +16,12 @@ if (!OR_API_KEY) {
 
 function wantsParcelLookup(s: string) {
   const digits = s.replace(/\D/g, "");
-  return digits.length >= 9 || /apn|ain|zoning|overlay|assessor|parcel/i.test(s);
+  // include both singular and plural overlay tokens
+  return digits.length >= 9 || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s);
 }
 function wantsOverlay(s: string) {
-  return /overlay|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
+  // accept 'overlay' and 'overlays'
+  return /\boverlays?\b|sea|csd|flood|tod|ridgeline|coastal|lup|community\s*plan/i.test(s || "");
 }
 function extractApn(s: string): string | undefined {
   const digits = s.replace(/\D/g, "");
@@ -38,10 +40,11 @@ function wantsZoningSection(s: string) {
 }
 function wantsOverlaysSection(s: string) {
   const q = s.toLowerCase();
-  // keep your original wantsOverlay as-is if you like; this one is a bit broader
-  return /\boverlay\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
+  // broader matcher, accept overlay(s) term and other overlay-like tokens
+  return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
 }
 function wantsAssessorSection(s: string) {
+  // Narrowed: do NOT trigger on APN/AIN. Only real assessor-related keywords.
   const q = s.toLowerCase();
   return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
 }
@@ -187,6 +190,7 @@ if (!SHOW_ZONING && !SHOW_OVERLAYS && !SHOW_ASSESSOR) {
   SHOW_ZONING = SHOW_OVERLAYS = SHOW_ASSESSOR = true;
 }
 
+console.log("[CHAT] hasZoning:", SHOW_ZONING, "hasOverlays:", SHOW_OVERLAYS, "hasAssessor:", SHOW_ASSESSOR);
 
 // --- Step 2: live lookups (TOOL OUTPUTS) ---
 let toolContext = "";
@@ -197,28 +201,35 @@ try {
     const address = extractAddress(lastUser);
 
     if (apn) {
+      // only call the fetchers if the SHOW_* flags are true
       const [zRes, aRes, oRes] = await Promise.allSettled([
         SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
         SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
         SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
       ]);
 
-      if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
-        toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
-      } else if (SHOW_ZONING && zRes.status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:zoning] ${String(zRes.reason)}`;
+      console.log("[CHAT] fetch results:",
+        "zoning:", SHOW_ZONING ? (zRes as any).status : "skipped",
+        "assessor:", SHOW_ASSESSOR ? (aRes as any).status : "skipped",
+        "overlays:", SHOW_OVERLAYS ? (oRes as any).status : "skipped"
+      );
+
+      if (SHOW_ZONING && (zRes as any).status === "fulfilled" && (zRes as any).value) {
+        toolContext += `\n[TOOL:zoning]\n${JSON.stringify((zRes as any).value, null, 2)}`;
+      } else if (SHOW_ZONING && (zRes as any).status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:zoning] ${String((zRes as any).reason)}`;
       }
 
-      if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
-        toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
-      } else if (SHOW_ASSESSOR && aRes.status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:assessor] ${String(aRes.reason)}`;
+      if (SHOW_ASSESSOR && (aRes as any).status === "fulfilled" && (aRes as any).value) {
+        toolContext += `\n[TOOL:assessor]\n${JSON.stringify((aRes as any).value, null, 2)}`;
+      } else if (SHOW_ASSESSOR && (aRes as any).status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:assessor] ${String((aRes as any).reason)}`;
       }
 
-      if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
-        toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
-      } else if (SHOW_OVERLAYS && oRes.status === "rejected") {
-        toolContext += `\n[TOOL_ERROR:overlays] ${String(oRes.reason)}`;
+      if (SHOW_OVERLAYS && (oRes as any).status === "fulfilled" && (oRes as any).value) {
+        toolContext += `\n[TOOL:overlays]\n${JSON.stringify((oRes as any).value, null, 2)}`;
+      } else if (SHOW_OVERLAYS && (oRes as any).status === "rejected") {
+        toolContext += `\n[TOOL_ERROR:overlays] ${String((oRes as any).reason)}`;
       }
 
     } else if (address) {
@@ -239,9 +250,13 @@ You are LA-Fires Assistant.
 
 Rules:
 - Use TOOL OUTPUTS as the single source of truth when present.
-- Prefer TOOL OUTPUTS over any other text. If there is no tool data for a section, output exactly "Section: Unknown" and continue.
+- Render ONLY the sections whose flags are true.
+- If a flagged section has no tool data, output exactly:
+Zoning
+Section: Unknown
+(or the appropriate section heading, e.g., Overlays / Assessor)
+- Never include any section that is not flagged.
 - Output plain text only (no Markdown, no **bold**, no lists, no code fences).
-- Render sections ONLY when their SHOW_* flag is true.
 - Valid section headings are exactly: "Zoning", "Overlays", "Assessor".
 - Inside each shown section, print concise KEY: VALUE lines.
 - Recommended order: Zoning, Overlays, Assessor.
@@ -290,8 +305,29 @@ ${contextData}`.trim() }] },
 
     // --- Step 4: final model call via OpenRouter with fallback ---
    let text = "";
-   try { text = await orWithRetryAndFallback(combinedPrompt, request, .2); }
-   catch { text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage(); }
+   try { 
+     // lower temperature to 0.1 to reduce creative drift
+     text = await orWithRetryAndFallback(combinedPrompt, request, 0.1); 
+   }
+   catch { 
+     text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage(); 
+   }
+
+   // Defensive post-filter: remove any section the model produced that wasn't flagged
+   try {
+     if (text) {
+       const removeSection = (input: string, heading: string) => {
+         const re = new RegExp(`(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`, "gi");
+         return input.replace(re, "");
+       };
+       if (!SHOW_ZONING) text = removeSection(text, "Zoning");
+       if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
+       if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
+       text = text.trim();
+     }
+   } catch (e) {
+     console.warn("[CHAT] post-filter failed:", e);
+   }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
   } catch (error: any) {
