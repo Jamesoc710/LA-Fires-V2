@@ -235,7 +235,8 @@ Rules:
     // --- Step 4: final model call via OpenRouter with fallback ---
     let text = "";
     try {
-      text = await orWithRetryAndFallback(combinedPrompt, request, 0.1);
+      // **FIX**: Lower temperature for more consistent output
+      text = await orWithRetryAndFallback(combinedPrompt, request, 0.05);
     } catch {
       text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
     }
