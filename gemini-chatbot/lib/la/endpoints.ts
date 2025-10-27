@@ -20,15 +20,19 @@ const env = (k: string, fallback = "") => (process.env[k]?.trim() ?? fallback);
 
 // Read from env (set in Vercel; optional .env.local for local dev)
 export const ENDPOINTS: EndpointMap = Object.freeze({
+  // Main parcel lookup service (yields AIN, APN, and geometry)
   ZNET_ADDRESS_SEARCH: env("ZNET_ADDRESS_SEARCH"),
+  // Zoning information service (queried by geometry)
   GISNET_PARCEL_QUERY: env("GISNET_PARCEL_QUERY"),
+  // Assessor details service (queried by AIN/APN)
   ASSESSOR_PARCEL_QUERY: env("ASSESSOR_PARCEL_QUERY"),
-  ZNET_VIEWER:
-    "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
-  GISNET_VIEWER: "https://planning.lacounty.gov/gisnet",
-  TITLE_22:
-    "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
 
+  // Static viewer links
+  ZNET_VIEWER: "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
+  GISNET_VIEWER: "https://planning.lacounty.gov/gisnet",
+  TITLE_22: "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
+
+  // Overlay services (up to 6)
   OVERLAY_QUERY_1: env("OVERLAY_QUERY_1"),
   OVERLAY_QUERY_2: env("OVERLAY_QUERY_2"),
   OVERLAY_QUERY_3: env("OVERLAY_QUERY_3"),
