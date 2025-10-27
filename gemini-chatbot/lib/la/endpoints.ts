@@ -29,7 +29,7 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
 
   // Static viewer links
   ZNET_VIEWER: "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
-  GISNET_VIEWER: "https://planning.lacounty.gov/gisnet",
+  GISNET_VIEWER: "https://egis-lacounty.hub.arcgis.com/",
   TITLE_22: "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
 
   // Overlay services (up to 6)
