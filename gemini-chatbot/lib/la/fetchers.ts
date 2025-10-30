@@ -1,5 +1,5 @@
 // lib/la/fetchers.ts
-import { endpoints } from "./endpoints";
+import { endpoints, JURISDICTION_QUERY } from "./endpoints";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -61,6 +61,70 @@ async function esriQuery(url: string, params: Record<string, string>) {
   }
   throw new Error("esriQuery: exhausted retries");
 }
+/* -------------------------------------------------------------------------- */
+/*                              JURISDICTION LOOKUP                           */
+/* -------------------------------------------------------------------------- */
+
+
+
+export type JurisdictionResult = {
+  jurisdiction: string;                 // e.g., "Malibu" | "Los Angeles" | "Unincorporated"
+  source: "CITY" | "COUNTY" | "ERROR";
+  raw?: Record<string, any>;
+  note?: string;
+};
+
+/** Query the county city-boundaries layer using a parcel centroid (fast & tiny). */
+export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
+  try {
+    // 1) get parcel geometry
+    const parcel = await getParcelByAINorAPN(id);
+    if (!parcel?.geometry) {
+      return {
+        jurisdiction: "Unknown",
+        source: "ERROR",
+        note: "Parcel geometry not found for this APN/AIN.",
+      };
+    }
+
+    // 2) use centroid in the same SR as the rest of the file (102100)
+    const centroid = makeCentroidFromGeom(parcel.geometry);
+    if (!centroid) {
+      return { jurisdiction: "Unknown", source: "ERROR", note: "Failed to compute centroid." };
+    }
+
+    // 3) query the city-boundaries layer
+    const r = await esriQuery(`${JURISDICTION_QUERY}/query`, {
+      returnGeometry: "false",
+      inSR: "102100",
+      spatialRel: "esriSpatialRelIntersects",
+      geometryType: "esriGeometryPoint",
+      geometry: JSON.stringify(centroid),
+      outFields: "NAME,CITY,AGENCY,JURISDICTN,OBJECTID",
+    });
+
+    const attrs = r?.features?.[0]?.attributes;
+    if (!attrs) {
+      // No intersecting city polygon → unincorporated County
+      return {
+        jurisdiction: "Unincorporated",
+        source: "COUNTY",
+        note: "No city boundary match found — defaulting to County.",
+      };
+    }
+
+    const name = attrs.CITY || attrs.NAME || attrs.JURISDICTN || attrs.AGENCY;
+    return {
+      jurisdiction: name || "Unincorporated",
+      source: name ? "CITY" : "COUNTY",
+      raw: attrs,
+    };
+  } catch (err: any) {
+    console.error("[lookupJurisdiction] Error:", err);
+    return { jurisdiction: "Unknown", source: "ERROR", note: String(err?.message || err) };
+  }
+}
+
 
 function digitsOnly(id: string) {
   return id.replace(/\D/g, "");
