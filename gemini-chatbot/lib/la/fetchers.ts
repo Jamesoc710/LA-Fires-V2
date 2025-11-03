@@ -1,5 +1,5 @@
 // lib/la/fetchers.ts
-import { endpoints, JURISDICTION_QUERY } from "./endpoints";
+import { endpoints } from "./endpoints";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -94,7 +94,7 @@ export async function lookupJurisdiction(id: string): Promise<JurisdictionResult
     }
 
     // 3) query the city-boundaries layer
-    const r = await esriQuery(`${JURISDICTION_QUERY}/query`, {
+     = await esriQuery(`${JURISDICTION_QUERY}/query`, {
       returnGeometry: "false",
       inSR: "102100",
       spatialRel: "esriSpatialRelIntersects",
