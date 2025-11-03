@@ -5,6 +5,7 @@ type EndpointMap = Readonly<{
   ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
   GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
   ASSESSOR_PARCEL_QUERY: string;  // Assessor attrs (same parcel service is fine)
+  JURISDICTION_QUERY?: string;    // <-- NEW: City boundaries (Jurisdiction layer)
   ZNET_VIEWER: string;
   GISNET_VIEWER: string;
   TITLE_22: string;
@@ -26,11 +27,18 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
   GISNET_PARCEL_QUERY: env("GISNET_PARCEL_QUERY"),
   // Assessor details service (queried by AIN/APN)
   ASSESSOR_PARCEL_QUERY: env("ASSESSOR_PARCEL_QUERY"),
+  // Jurisdiction detection (City Boundaries layer)
+  JURISDICTION_QUERY: env(
+    "JURISDICTION_QUERY",
+    "https://dpw.gis.lacounty.gov/dpw/rest/services/PW_Jurisdiction_Locator/MapServer/0"
+  ),
 
   // Static viewer links
-  ZNET_VIEWER: "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
+  ZNET_VIEWER:
+    "https://experience.arcgis.com/experience/0eecc2d2d0b944a787f282420c8b290c",
   GISNET_VIEWER: "https://egis-lacounty.hub.arcgis.com/",
-  TITLE_22: "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
+  TITLE_22:
+    "https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO",
 
   // Overlay services (up to 6)
   OVERLAY_QUERY_1: env("OVERLAY_QUERY_1"),
@@ -41,11 +49,11 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
   OVERLAY_QUERY_6: env("OVERLAY_QUERY_6"),
 });
 
-// Small convenience object used by fetchers.ts
 export const endpoints = {
   znetAddressSearch: ENDPOINTS.ZNET_ADDRESS_SEARCH,
   gisnetParcelQuery: ENDPOINTS.GISNET_PARCEL_QUERY,
   assessorParcelQuery: ENDPOINTS.ASSESSOR_PARCEL_QUERY,
+  jurisdictionQuery: ENDPOINTS.JURISDICTION_QUERY, // <-- NEW
 
   overlayQueries: [
     ENDPOINTS.OVERLAY_QUERY_1,
@@ -61,27 +69,3 @@ export const endpoints = {
   assessorViewerForAIN: (ain: string) =>
     `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`,
 };
-
-// Require parcel + zoning; assessor optional
-export function endpointsConfigured(): boolean {
-  return Boolean(endpoints.znetAddressSearch && endpoints.gisnetParcelQuery);
-}
-
-// Viewer helpers (optional)
-export function assessorParcelUrl(apn: string): string {
-  const normalized = apn.replace(/[^0-9]/g, "");
-  return `https://portal.assessor.lacounty.gov/parceldetail/${normalized}`;
-}
-export function znetViewerUrl(): string {
-  return ENDPOINTS.ZNET_VIEWER;
-}
-export function gisnetViewerUrl(): string {
-  return ENDPOINTS.GISNET_VIEWER;
-}
-export function assertCoreEndpoints() {
-  if (!endpoints.znetAddressSearch || !endpoints.gisnetParcelQuery) {
-    throw new Error(
-      "Missing required ArcGIS endpoints. Ensure ZNET_ADDRESS_SEARCH and GISNET_PARCEL_QUERY are set in this environment."
-    );
-  }
-}
