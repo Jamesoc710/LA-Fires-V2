@@ -68,6 +68,20 @@ export const endpoints = {
   gisnetViewer: ENDPOINTS.GISNET_VIEWER,
 };
 
+export function assertCoreEndpoints() {
+  if (!endpoints.znetAddressSearch || !endpoints.gisnetParcelQuery) {
+    throw new Error(
+      "Missing required ArcGIS endpoints. Ensure ZNET_ADDRESS_SEARCH and GISNET_PARCEL_QUERY are set."
+    );
+  }
+  // Optional: warn if jurisdiction endpoint is missing
+  if (!endpoints.jurisdictionQuery) {
+    // eslint-disable-next-line no-console
+    console.warn("[WARN] Missing JURISDICTION_QUERY — city detection disabled.");
+  }
+}
+
+
 // Viewer URLs for client-side use
 export const znetViewerUrl = ENDPOINTS.ZNET_VIEWER;
 export const gisnetViewerUrl = ENDPOINTS.GISNET_VIEWER;
