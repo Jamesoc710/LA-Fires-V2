@@ -53,7 +53,7 @@ export const endpoints = {
   znetAddressSearch: ENDPOINTS.ZNET_ADDRESS_SEARCH,
   gisnetParcelQuery: ENDPOINTS.GISNET_PARCEL_QUERY,
   assessorParcelQuery: ENDPOINTS.ASSESSOR_PARCEL_QUERY,
-  jurisdictionQuery: ENDPOINTS.JURISDICTION_QUERY, // <-- NEW
+  jurisdictionQuery: ENDPOINTS.JURISDICTION_QUERY,
 
   overlayQueries: [
     ENDPOINTS.OVERLAY_QUERY_1,
@@ -66,6 +66,10 @@ export const endpoints = {
 
   znetViewer: ENDPOINTS.ZNET_VIEWER,
   gisnetViewer: ENDPOINTS.GISNET_VIEWER,
-  assessorViewerForAIN: (ain: string) =>
-    `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`,
 };
+
+// Viewer URLs for client-side use
+export const znetViewerUrl = ENDPOINTS.ZNET_VIEWER;
+export const gisnetViewerUrl = ENDPOINTS.GISNET_VIEWER;
+export const assessorParcelUrl = (ain: string) =>
+  `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`;
