@@ -93,8 +93,12 @@ export async function lookupJurisdiction(id: string): Promise<JurisdictionResult
       return { jurisdiction: "Unknown", source: "ERROR", note: "Failed to compute centroid." };
     }
 
+    if (!endpoints.jurisdictionQuery) {
+      return { jurisdiction: "Unknown", source: "ERROR", note: "JURISDICTION_QUERY endpoint is not configured." };
+    }
+
     // 3) query the city-boundaries layer
-     = await esriQuery(`${JURISDICTION_QUERY}/query`, {
+    const r = await esriQuery(`${endpoints.jurisdictionQuery}/query`, {
       returnGeometry: "false",
       inSR: "102100",
       spatialRel: "esriSpatialRelIntersects",
@@ -218,14 +222,23 @@ export async function getParcelByAINorAPN(id: string) {
   // NOTE: no SQL functions; many LA layers disallow them
   const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
 
-  const r = await esriQuery(endpoints.znetAddressSearch, {
-    returnGeometry: "true",
-    outSR: "102100",
-    where,
-    outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
-  });
+  if (!endpoints.znetAddressSearch) {
+    throw new Error("Missing ZNET_ADDRESS_SEARCH endpoint");
+  }
+  let r: any;
+  try {
+    r = await esriQuery(endpoints.znetAddressSearch, {
+      returnGeometry: "true",
+      outSR: "102100",
+      where,
+      outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
+    });
+  } catch (e) {
+    console.log("[PARCEL] query failed:", String(e));
+    return null;
+  }
 
-  const feat = pickLargestFeatureByArea(r.features);
+  const feat = pickLargestFeatureByArea(Array.isArray(r?.features) ? r.features : []);
   return feat ?? null;
 }
 
