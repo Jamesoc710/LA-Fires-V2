@@ -334,7 +334,7 @@ return (
         </a>
       )}
       <a
-        href={znetViewerUrl()}
+        href={znetViewerUrl}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
@@ -343,7 +343,7 @@ return (
         ZNET ↗
       </a>
       <a
-        href={gisnetViewerUrl()}
+        href={gisnetViewerUrl}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
