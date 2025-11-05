@@ -307,4 +307,8 @@ Rules:
     }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
-  } catch (error: any).
+  } catch (error: any) {
+    console.error("Error in chat API:", error);
+    return NextResponse.json({ response: friendlyFallbackMessage(), intent: "" }, { status: 200 });
+  }
+}
