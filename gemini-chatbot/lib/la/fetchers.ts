@@ -136,7 +136,7 @@ function makeEnvelopeFromGeom(geom: any) {
   };
 }
 
-function makeCentroidFromGeom(geom: any) {
+export function makeCentroidFromGeom(geom: any) {
   const env = makeEnvelopeFromGeom(geom);
   if (!env) return null;
   return {
@@ -186,61 +186,30 @@ export async function getParcelByAINorAPN(id: string) {
 /*                              JURISDICTION LOOKUP                           */
 /* -------------------------------------------------------------------------- */
 
-export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
-  // FIX: Ensure the jurisdictionQuery endpoint is configured before using it.
+/** Query DPW City Boundaries by a point in Web Mercator (wkid 102100). */
+export async function lookupJurisdictionPoint102100(x: number, y: number): Promise<JurisdictionResult> {
   if (!endpoints.jurisdictionQuery) {
-    return {
-      jurisdiction: "Unknown",
-      source: "ERROR",
-      note: "Jurisdiction query endpoint is not configured.",
-    };
+    return { jurisdiction: "Unknown", source: "ERROR", note: "JURISDICTION_QUERY not configured." };
   }
 
   try {
-    const parcel = await getParcelByAINorAPN(id);
-    if (!parcel?.geometry) {
-      return { jurisdiction: "Unknown", source: "ERROR", note: "Parcel geometry not found." };
-    }
+    const geometry = JSON.stringify({
+      x, y,
+      spatialReference: { wkid: 102100 }
+    });
 
-    const centroid = makeCentroidFromGeom(parcel.geometry);
-    if (!centroid) {
-      return { jurisdiction: "Unknown", source: "ERROR", note: "Failed to compute centroid." };
-    }
-
-    // ---- Attempt A: 102100 JSON point
-    try {
-      const rA = await esriQuery(endpoints.jurisdictionQuery, {
-        returnGeometry: "false",
-        inSR: "102100",
-        spatialRel: "esriSpatialRelIntersects",
-        geometryType: "esriGeometryPoint",
-        geometry: JSON.stringify(centroid),
-        outFields: "CITY_NAME,CITY_TYPE,NAME,CITY,JURISDICTN,AGENCY,FEAT_TYPE",
-      });
-      const aA = rA?.features?.[0]?.attributes;
-      if (aA) {
-        const name = aA.CITY_NAME || aA.CITY || aA.NAME || aA.JURISDICTN || aA.AGENCY;
-        const isCity = (aA.CITY_TYPE || aA.FEAT_TYPE || "").toString().toLowerCase().includes("city");
-        return { jurisdiction: name || "Unincorporated", source: isCity ? "CITY" : "COUNTY", raw: aA };
-      }
-    } catch (e) {
-      // fall through to Attempt B
-    }
-
-    // ---- Attempt B: 4326 "x,y" point (some services prefer this)
-    const c4326 = wmToWgs84(centroid);
-    const rB = await esriQuery(endpoints.jurisdictionQuery, {
+    // Ask for the fields that actually exist on the layer
+    const r = await esriQuery(endpoints.jurisdictionQuery, {
       returnGeometry: "false",
-      inSR: "4326",
+      inSR: "102100",
       spatialRel: "esriSpatialRelIntersects",
       geometryType: "esriGeometryPoint",
-      geometry: `${c4326.x},${c4326.y}`,          // compact form
-      outFields: "CITY_NAME,CITY_TYPE,NAME,CITY,JURISDICTN,AGENCY,FEAT_TYPE",
+      geometry,
+      outFields: "CITY_NAME,CITY_TYPE,OBJECTID",
     });
-    const aB = rB?.features?.[0]?.attributes;
 
-    if (!aB) {
-      // no intersecting city polygon → unincorporated
+    const attrs = r?.features?.[0]?.attributes;
+    if (!attrs) {
       return {
         jurisdiction: "Unincorporated",
         source: "COUNTY",
@@ -248,11 +217,18 @@ export async function lookupJurisdiction(id: string): Promise<JurisdictionResult
       };
     }
 
-    const name = aB.CITY_NAME || aB.CITY || aB.NAME || aB.JURISDICTN || aB.AGENCY;
-    const isCity = (aB.CITY_TYPE || aB.FEAT_TYPE || "").toString().toLowerCase().includes("city");
-    return { jurisdiction: name || "Unincorporated", source: isCity ? "CITY" : "COUNTY", raw: aB };
+    // Normalize name and unincorporated flag
+    const name = (attrs.CITY_NAME as string | null) ?? null;
+    const type = (attrs.CITY_TYPE as string | null) ?? null;
+    const isCity = (type?.toLowerCase() === "city");
+
+    return {
+      jurisdiction: name ?? "Unincorporated",
+      source: isCity ? "CITY" : "COUNTY",
+      raw: attrs,
+    };
   } catch (err: any) {
-    console.error("[lookupJurisdiction] Error:", err);
+    console.error("[lookupJurisdictionPoint102100] Error:", err);
     return { jurisdiction: "Unknown", source: "ERROR", note: String(err?.message || err) };
   }
 }
@@ -280,6 +256,17 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
     };
 
   const centroid = makeCentroidFromGeom(parcel.geometry);
+  if (!centroid) {
+    // This case should be rare, but handle it.
+    return {
+      card: {
+        type: "zoning",
+        title: "Zoning (City)",
+        body: "Could not compute parcel centroid.",
+      },
+    };
+  }
+  
   const r = await esriQuery(provider.zoning.url, {
     returnGeometry: "false",
     inSR: "102100",
