@@ -68,62 +68,77 @@ async function esriQuery(url: string, params: Record<string, string>) {
 
 
 
-export type JurisdictionResult = {
-  jurisdiction: string;                 // e.g., "Malibu" | "Los Angeles" | "Unincorporated"
+type JurisdictionResult = {
+  jurisdiction: string;
   source: "CITY" | "COUNTY" | "ERROR";
   raw?: Record<string, any>;
   note?: string;
 };
 
-/** Query the county city-boundaries layer using a parcel centroid (fast & tiny). */
+// WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
+function wmToWgs84(point102100: { x: number; y: number }) {
+  const R = 6378137;
+  const lon = (point102100.x / R) * 180 / Math.PI;
+  const lat = (2 * Math.atan(Math.exp(point102100.y / R)) - Math.PI / 2) * 180 / Math.PI;
+  return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
+}
+
 export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
   try {
-    // 1) get parcel geometry
     const parcel = await getParcelByAINorAPN(id);
     if (!parcel?.geometry) {
-      return {
-        jurisdiction: "Unknown",
-        source: "ERROR",
-        note: "Parcel geometry not found for this APN/AIN.",
-      };
+      return { jurisdiction: "Unknown", source: "ERROR", note: "Parcel geometry not found." };
     }
 
-    // 2) use centroid in the same SR as the rest of the file (102100)
     const centroid = makeCentroidFromGeom(parcel.geometry);
     if (!centroid) {
       return { jurisdiction: "Unknown", source: "ERROR", note: "Failed to compute centroid." };
     }
 
-    if (!endpoints.jurisdictionQuery) {
-      return { jurisdiction: "Unknown", source: "ERROR", note: "JURISDICTION_QUERY endpoint is not configured." };
+    // ---- Attempt A: 102100 JSON point
+    try {
+      const rA = await esriQuery(endpoints.jurisdictionQuery, {
+        returnGeometry: "false",
+        inSR: "102100",
+        spatialRel: "esriSpatialRelIntersects",
+        geometryType: "esriGeometryPoint",
+        geometry: JSON.stringify(centroid),
+        outFields: "CITY_NAME,CITY_TYPE,NAME,CITY,JURISDICTN,AGENCY,FEAT_TYPE",
+      });
+      const aA = rA?.features?.[0]?.attributes;
+      if (aA) {
+        const name = aA.CITY_NAME || aA.CITY || aA.NAME || aA.JURISDICTN || aA.AGENCY;
+        const isCity = (aA.CITY_TYPE || aA.FEAT_TYPE || "").toString().toLowerCase().includes("city");
+        return { jurisdiction: name || "Unincorporated", source: isCity ? "CITY" : "COUNTY", raw: aA };
+      }
+    } catch (e) {
+      // fall through to Attempt B
     }
 
-    // 3) query the city-boundaries layer
-    const r = await esriQuery(`${endpoints.jurisdictionQuery}/query`, {
+    // ---- Attempt B: 4326 "x,y" point (some services prefer this)
+    const c4326 = wmToWgs84(centroid);
+    const rB = await esriQuery(endpoints.jurisdictionQuery, {
       returnGeometry: "false",
-      inSR: "102100",
+      inSR: "4326",
       spatialRel: "esriSpatialRelIntersects",
       geometryType: "esriGeometryPoint",
-      geometry: JSON.stringify(centroid),
-      outFields: "NAME,CITY,AGENCY,JURISDICTN,OBJECTID",
+      geometry: `${c4326.x},${c4326.y}`,          // compact form
+      outFields: "CITY_NAME,CITY_TYPE,NAME,CITY,JURISDICTN,AGENCY,FEAT_TYPE",
     });
+    const aB = rB?.features?.[0]?.attributes;
 
-    const attrs = r?.features?.[0]?.attributes;
-    if (!attrs) {
-      // No intersecting city polygon → unincorporated County
+    if (!aB) {
+      // no intersecting city polygon → unincorporated
       return {
         jurisdiction: "Unincorporated",
         source: "COUNTY",
-        note: "No city boundary match found — defaulting to County.",
+        note: "No city boundary match found.",
       };
     }
 
-    const name = attrs.CITY || attrs.NAME || attrs.JURISDICTN || attrs.AGENCY;
-    return {
-      jurisdiction: name || "Unincorporated",
-      source: name ? "CITY" : "COUNTY",
-      raw: attrs,
-    };
+    const name = aB.CITY_NAME || aB.CITY || aB.NAME || aB.JURISDICTN || aB.AGENCY;
+    const isCity = (aB.CITY_TYPE || aB.FEAT_TYPE || "").toString().toLowerCase().includes("city");
+    return { jurisdiction: name || "Unincorporated", source: isCity ? "CITY" : "COUNTY", raw: aB };
   } catch (err: any) {
     console.error("[lookupJurisdiction] Error:", err);
     return { jurisdiction: "Unknown", source: "ERROR", note: String(err?.message || err) };
