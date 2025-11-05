@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
-import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
+import { lookupZoning, lookupAssessor, lookupOverlays, lookupJurisdiction } from "@/lib/la/fetchers";
+import { endpoints } from "@/lib/la/endpoints";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
