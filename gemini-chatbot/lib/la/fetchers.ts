@@ -1,6 +1,6 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
-import type { CityProvider } from "./providers";
+import type { CityProvider, JurisdictionResult } from "./providers";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -62,18 +62,89 @@ async function esriQuery(url: string, params: Record<string, string>) {
   }
   throw new Error("esriQuery: exhausted retries");
 }
-/* -------------------------------------------------------------------------- */
-/*                              JURISDICTION LOOKUP                           */
-/* -------------------------------------------------------------------------- */
 
+function digitsOnly(id: string) {
+  return id.replace(/\D/g, "");
+}
 
+function areaOfGeom(geom: any): number | null {
+  if (!geom) return null;
+  try {
+    // polygon rings: [[x,y], ...]
+    const rings = geom.rings?.[0];
+    if (!Array.isArray(rings) || rings.length < 3) return null;
+    // rough bbox area
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const [x, y] of rings) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return (maxX - minX) * (maxY - minY);
+  } catch {
+    return null;
+  }
+}
 
-type JurisdictionResult = {
-  jurisdiction: string;
-  source: "CITY" | "COUNTY" | "ERROR";
-  raw?: Record<string, any>;
-  note?: string;
-};
+function pickLargestFeatureByArea(features: any[] | undefined) {
+  if (!features?.length) return undefined;
+  // area in WebMercator (outSR=102100) -> approximate by ring bbox area
+  let best = features[0];
+  let bestArea = areaOfGeom(features[0]?.geometry);
+  for (let i = 1; i < features.length; i++) {
+    const a = areaOfGeom(features[i]?.geometry);
+    if ((a ?? 0) > (bestArea ?? 0)) {
+      best = features[i];
+      bestArea = a;
+    }
+  }
+  return best;
+}
+
+function normalizeApnVariants(id: string) {
+  const digits = id.replace(/\D/g, "");                                // 5843004015
+  const dashed =
+    digits.length === 10
+      ? `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`
+      : id;                                                             // fallback
+  return { digits, dashed };
+}
+
+function makeEnvelopeFromGeom(geom: any) {
+  const rings = geom?.rings?.[0] ?? [];
+  if (!rings.length) return null;
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const [x, y] of rings) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return {
+    xmin: minX,
+    ymin: minY,
+    xmax: maxX,
+    ymax: maxY,
+    spatialReference: { wkid: 102100 },
+  };
+}
+
+function makeCentroidFromGeom(geom: any) {
+  const env = makeEnvelopeFromGeom(geom);
+  if (!env) return null;
+  return {
+    x: (env.xmin + env.xmax) / 2,
+    y: (env.ymin + env.ymax) / 2,
+    spatialReference: { wkid: 102100 },
+  };
+}
 
 // WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
 function wmToWgs84(point102100: { x: number; y: number }) {
@@ -82,6 +153,38 @@ function wmToWgs84(point102100: { x: number; y: number }) {
   const lat = (2 * Math.atan(Math.exp(point102100.y / R)) - Math.PI / 2) * 180 / Math.PI;
   return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
 }
+
+/* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
+
+export async function getParcelByAINorAPN(id: string) {
+  const { digits, dashed } = normalizeApnVariants(id);
+
+  // NOTE: no SQL functions; many LA layers disallow them
+  const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
+
+  if (!endpoints.znetAddressSearch) {
+    throw new Error("Missing ZNET_ADDRESS_SEARCH endpoint");
+  }
+  let r: any;
+  try {
+    r = await esriQuery(endpoints.znetAddressSearch, {
+      returnGeometry: "true",
+      outSR: "102100",
+      where,
+      outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
+    });
+  } catch (e) {
+    console.log("[PARCEL] query failed:", String(e));
+    return null;
+  }
+
+  const feat = pickLargestFeatureByArea(Array.isArray(r?.features) ? r.features : []);
+  return feat ?? null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              JURISDICTION LOOKUP                           */
+/* -------------------------------------------------------------------------- */
 
 export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
   try {
@@ -215,120 +318,6 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
     },
   };
 }
-
-
-function digitsOnly(id: string) {
-  return id.replace(/\D/g, "");
-}
-
-function pickLargestFeatureByArea(features: any[] | undefined) {
-  if (!features?.length) return undefined;
-  // area in WebMercator (outSR=102100) -> approximate by ring bbox area
-  let best = features[0];
-  let bestArea = areaOfGeom(features[0]?.geometry);
-  for (let i = 1; i < features.length; i++) {
-    const a = areaOfGeom(features[i]?.geometry);
-    if ((a ?? 0) > (bestArea ?? 0)) {
-      best = features[i];
-      bestArea = a;
-    }
-  }
-  return best;
-}
-
-function normalizeApnVariants(id: string) {
-  const digits = id.replace(/\D/g, "");                                // 5843004015
-  const dashed =
-    digits.length === 10
-      ? `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`
-      : id;                                                             // fallback
-  return { digits, dashed };
-}
-
-
-function areaOfGeom(geom: any): number | null {
-  if (!geom) return null;
-  try {
-    // polygon rings: [[x,y], ...]
-    const rings = geom.rings?.[0];
-    if (!Array.isArray(rings) || rings.length < 3) return null;
-    // rough bbox area
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    for (const [x, y] of rings) {
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-    return (maxX - minX) * (maxY - minY);
-  } catch {
-    return null;
-  }
-}
-
-function makeEnvelopeFromGeom(geom: any) {
-  const rings = geom?.rings?.[0] ?? [];
-  if (!rings.length) return null;
-  let minX = Infinity,
-    minY = Infinity,
-    maxX = -Infinity,
-    maxY = -Infinity;
-  for (const [x, y] of rings) {
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-  }
-  return {
-    xmin: minX,
-    ymin: minY,
-    xmax: maxX,
-    ymax: maxY,
-    spatialReference: { wkid: 102100 },
-  };
-}
-
-function makeCentroidFromGeom(geom: any) {
-  const env = makeEnvelopeFromGeom(geom);
-  if (!env) return null;
-  return {
-    x: (env.xmin + env.xmax) / 2,
-    y: (env.ymin + env.ymax) / 2,
-    spatialReference: { wkid: 102100 },
-  };
-}
-
-/* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
-
-export async function getParcelByAINorAPN(id: string) {
-  const { digits, dashed } = normalizeApnVariants(id);
-
-  // NOTE: no SQL functions; many LA layers disallow them
-  const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
-
-  if (!endpoints.znetAddressSearch) {
-    throw new Error("Missing ZNET_ADDRESS_SEARCH endpoint");
-  }
-  let r: any;
-  try {
-    r = await esriQuery(endpoints.znetAddressSearch, {
-      returnGeometry: "true",
-      outSR: "102100",
-      where,
-      outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
-    });
-  } catch (e) {
-    console.log("[PARCEL] query failed:", String(e));
-    return null;
-  }
-
-  const feat = pickLargestFeatureByArea(Array.isArray(r?.features) ? r.features : []);
-  return feat ?? null;
-}
-
 
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 
@@ -553,9 +542,6 @@ function summarizeOverlay(a?: Record<string, any> | null): string | undefined {
     return pick;
   }
 }
-
-
-
 
 /* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
 
