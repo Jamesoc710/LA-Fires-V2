@@ -1,6 +1,6 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
-import type { CityProvider, JurisdictionResult } from "./providers";
+import type { CityProvider } from "./providers";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -185,6 +185,15 @@ export async function getParcelByAINorAPN(id: string) {
 /* -------------------------------------------------------------------------- */
 /*                              JURISDICTION LOOKUP                           */
 /* -------------------------------------------------------------------------- */
+
+type JurisdictionResult = {
+  jurisdiction: string;
+  source: "CITY" | "COUNTY" | "ERROR";
+  raw?: Record<string, any>;
+  note?: string;
+};
+
+
 
 export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
   try {
