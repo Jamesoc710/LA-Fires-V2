@@ -1,5 +1,6 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
+import type { CityProvider } from "./providers";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -127,6 +128,77 @@ export async function lookupJurisdiction(id: string): Promise<JurisdictionResult
     console.error("[lookupJurisdiction] Error:", err);
     return { jurisdiction: "Unknown", source: "ERROR", note: String(err?.message || err) };
   }
+}
+
+export async function lookupCityZoning(id: string, provider: CityProvider) {
+  if (provider.method !== "arcgis_query") {
+    return {
+      card: {
+        type: "zoning",
+        title: "Zoning (City)",
+        body: "Viewer only.",
+        links: "viewer" in provider ? { viewer: provider.viewer } : undefined,
+      },
+    };
+  }
+
+  const parcel = await getParcelByAINorAPN(id);
+  if (!parcel?.geometry)
+    return {
+      card: {
+        type: "zoning",
+        title: "Zoning (City)",
+        body: "Parcel geometry not found.",
+      },
+    };
+
+  const centroid = makeCentroidFromGeom(parcel.geometry);
+  const r = await esriQuery(provider.zoning.url, {
+    returnGeometry: "false",
+    inSR: "102100",
+    spatialRel: "esriSpatialRelIntersects",
+    geometryType: "esriGeometryPoint",
+    geometry: JSON.stringify(centroid),
+    outFields: provider.zoning.outFields || "*",
+  });
+
+  const a = r?.features?.[0]?.attributes ?? null;
+  if (!a) {
+    return {
+      card: {
+        type: "zoning",
+        title: "Zoning (City)",
+        body: "No zoning feature found at the city service for this parcel.",
+        links: provider.viewer ? { viewer: provider.viewer } : undefined,
+      },
+    };
+  }
+
+  const pick = (keys?: string[]) =>
+    keys?.find((k) => a[k] != null)
+      ? String(a[keys.find((k) => a[k] != null)!])
+      : null;
+  const fields = provider.zoning.fields || {};
+  const zone = pick(fields.zone || ["ZONE", "ZONING", "ZONE_CODE", "ZN_CODE"]);
+  const desc = pick(fields.desc || ["Z_DESC", "ZONE_DESC", "DESCRIPT"]);
+  const label = zone
+    ? desc
+      ? `${zone} — ${desc}`
+      : zone
+    : Object.keys(a)
+        .slice(0, 2)
+        .map((k) => `${k}:${a[k]}`)
+        .join(", ");
+
+  return {
+    card: {
+      type: "zoning",
+      title: "Zoning (City)",
+      body: label || "Zoning attributes found.",
+      raw: a,
+      links: provider.viewer ? { viewer: provider.viewer } : undefined,
+    },
+  };
 }
 
 
