@@ -1,6 +1,6 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
-import type { CityProvider } from "./providers";
+import type { CityProvider, JurisdictionResult } from "./providers";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -186,16 +186,16 @@ export async function getParcelByAINorAPN(id: string) {
 /*                              JURISDICTION LOOKUP                           */
 /* -------------------------------------------------------------------------- */
 
-type JurisdictionResult = {
-  jurisdiction: string;
-  source: "CITY" | "COUNTY" | "ERROR";
-  raw?: Record<string, any>;
-  note?: string;
-};
-
-
-
 export async function lookupJurisdiction(id: string): Promise<JurisdictionResult> {
+  // FIX: Ensure the jurisdictionQuery endpoint is configured before using it.
+  if (!endpoints.jurisdictionQuery) {
+    return {
+      jurisdiction: "Unknown",
+      source: "ERROR",
+      note: "Jurisdiction query endpoint is not configured.",
+    };
+  }
+
   try {
     const parcel = await getParcelByAINorAPN(id);
     if (!parcel?.geometry) {
