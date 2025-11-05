@@ -17,7 +17,7 @@ type EndpointMap = Readonly<{
   OVERLAY_QUERY_6?: string;
 }>;
 
-const env = (k: string, fallback = "") => (process.env[k]?.trim() ?? fallback);
+const env = (k: string, fallback = "") => (process.env[k] || fallback).trim();
 
 // Read from env (set in Vercel; optional .env.local for local dev)
 export const ENDPOINTS: EndpointMap = Object.freeze({
