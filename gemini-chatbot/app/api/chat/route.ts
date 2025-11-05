@@ -176,20 +176,55 @@ export async function POST(request: NextRequest) {
         const address = extractAddress(lastUser);
 
         if (apn) {
-          const [zRes, aRes, oRes] = await Promise.allSettled([
-            SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
-            SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
-            SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
-          ]);
-
-          if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
-            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
-          }
-          if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
-            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
-          }
-          if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
-            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+          // --- Jurisdiction first ---
+          const j = await lookupJurisdiction(apn);
+          toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
+        
+          if (j?.source === "CITY") {
+            const cityName = j.jurisdiction || "";
+            const provider = (endpoints as any).cityProviders?.[cityName] as
+              | { viewerUrl?: string; zoningUrl?: string; notes?: string }
+              | undefined;
+            const whitelisted = Boolean(provider); // only LA + Pasadena are configured
+        
+            if (SHOW_ZONING) {
+              toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
+                note: whitelisted
+                  ? "Parcel is within city limits; use the city's official zoning viewer."
+                  : "Parcel is in a city not yet configured; county zoning does not apply.",
+                city: cityName,
+                viewer: provider?.viewerUrl || null,
+                zoningUrl: provider?.zoningUrl || null,
+              }, null, 2)}`;
+            }
+            if (SHOW_OVERLAYS) {
+              toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
+                note: "City parcel; use the city's GIS for overlays/specific plans.",
+                city: cityName,
+                viewer: provider?.viewerUrl || null,
+              }, null, 2)}`;
+            }
+            if (SHOW_ASSESSOR) {
+              const a = await lookupAssessor(apn).catch(() => null);
+              if (a) toolContext += `\n[TOOL:assessor]\n${JSON.stringify(a, null, 2)}`;
+            }
+            // Skip county zoning/overlays for all city parcels.
+          } else {
+            // Unincorporated (or unknown) -> County flow
+            const [zRes, aRes, oRes] = await Promise.allSettled([
+              SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
+              SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
+              SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+            ]);
+            if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
+              toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
+            }
+            if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
+              toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+            }
+            if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
+              toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+            }
           }
         } else if (address) {
           toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
