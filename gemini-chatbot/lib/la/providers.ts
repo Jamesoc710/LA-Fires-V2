@@ -7,6 +7,13 @@ export type CityProviderArcGIS = {
 };
 export type CityProvider = CityProviderViewer | CityProviderArcGIS;
 
+export type JurisdictionResult = {
+  jurisdiction: string;
+  source: "CITY" | "COUNTY" | "ERROR";
+  raw?: Record<string, any>;
+  note?: string;
+};
+
 let REGISTRY: Record<string, CityProvider> = {};
 try {
   const raw = process.env.CITY_PROVIDERS_JSON?.trim();
