@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
-import { lookupZoning, lookupAssessor, lookupOverlays, lookupJurisdiction } from "@/lib/la/fetchers";
-import { endpoints } from "@/lib/la/endpoints";
+import { 
+  lookupZoning, 
+  lookupAssessor, 
+  lookupOverlays, 
+  getParcelByAINorAPN,
+  makeCentroidFromGeom,
+  lookupJurisdictionPoint102100 
+} from "@/lib/la/fetchers";
+import { resolveCityProvider } from "@/lib/la/providers";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -176,32 +183,38 @@ export async function POST(request: NextRequest) {
         const address = extractAddress(lastUser);
 
         if (apn) {
+          const parcel = await getParcelByAINorAPN(apn);
+          if (!parcel) {
+            throw new Error(`Parcel with APN/AIN ${apn} not found.`);
+          }
+          
+          const centroid = makeCentroidFromGeom(parcel.geometry);
+          if (!centroid) {
+            throw new Error(`Could not compute centroid for APN/AIN ${apn}.`);
+          }
+
           // --- Jurisdiction first ---
-          const j = await lookupJurisdiction(apn);
+          const j = await lookupJurisdictionPoint102100(centroid.x, centroid.y);
           toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
         
           if (j?.source === "CITY") {
             const cityName = j.jurisdiction || "";
-            const provider = (endpoints as any).cityProviders?.[cityName] as
-              | { viewerUrl?: string; zoningUrl?: string; notes?: string }
-              | undefined;
-            const whitelisted = Boolean(provider); // only LA + Pasadena are configured
+            const provider = resolveCityProvider(cityName);
         
             if (SHOW_ZONING) {
               toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
-                note: whitelisted
+                note: provider
                   ? "Parcel is within city limits; use the city's official zoning viewer."
                   : "Parcel is in a city not yet configured; county zoning does not apply.",
                 city: cityName,
-                viewer: provider?.viewerUrl || null,
-                zoningUrl: provider?.zoningUrl || null,
+                viewer: provider && "viewer" in provider ? provider.viewer : null,
               }, null, 2)}`;
             }
             if (SHOW_OVERLAYS) {
               toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                 note: "City parcel; use the city's GIS for overlays/specific plans.",
                 city: cityName,
-                viewer: provider?.viewerUrl || null,
+                viewer: provider && "viewer" in provider ? provider.viewer : null,
               }, null, 2)}`;
             }
             if (SHOW_ASSESSOR) {
@@ -294,8 +307,4 @@ Rules:
     }
 
     return NextResponse.json({ response: text, intent }, { status: 200 });
-  } catch (error: any) {
-    console.error("Error in chat API:", error);
-    return NextResponse.json({ response: friendlyFallbackMessage(), intent: "" }, { status: 200 });
-  }
-}
+  } catch (error: any).
