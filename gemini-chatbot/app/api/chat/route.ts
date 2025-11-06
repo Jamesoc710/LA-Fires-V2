@@ -7,7 +7,8 @@ import {
   lookupOverlays, 
   getParcelByAINorAPN,
   makeCentroidFromGeom,
-  lookupJurisdictionPoint102100 
+  lookupJurisdictionPoint102100,
+  lookupCityZoning
 } from "@/lib/la/fetchers";
 import { resolveCityProvider } from "@/lib/la/providers";
 
@@ -201,15 +202,13 @@ export async function POST(request: NextRequest) {
             const cityName = j.jurisdiction || "";
             const provider = resolveCityProvider(cityName);
         
-            if (SHOW_ZONING) {
-              toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
-                note: provider
-                  ? "Parcel is within city limits; use the city's official zoning viewer."
-                  : "Parcel is in a city not yet configured; county zoning does not apply.",
-                city: cityName,
-                viewer: provider && "viewer" in provider ? provider.viewer : null,
-              }, null, 2)}`;
+            if (SHOW_ZONING && provider) {
+                const cityZ = await lookupCityZoning(apn, provider);
+                toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cityZ, null, 2)}`;
+            } else if (SHOW_ZONING) {
+                toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({ note: "Parcel is in a city not yet configured; county zoning does not apply.", city: cityName }, null, 2)}`;
             }
+
             if (SHOW_OVERLAYS) {
               toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                 note: "City parcel; use the city's GIS for overlays/specific plans.",
