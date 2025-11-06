@@ -1,6 +1,7 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
 import type { CityProvider, JurisdictionResult } from "./providers";
+import { normalizeCityName } from "./providers";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -146,6 +147,14 @@ export function makeCentroidFromGeom(geom: any) {
   };
 }
 
+function firstFieldValue(a: any, csv?: string) {
+  if (!a || !csv) return null;
+  for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
+    if (k in a && a[k] != null && String(a[k]).trim() !== "") return a[k];
+  }
+  return null;
+}
+
 // WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
 function wmToWgs84(point102100: { x: number; y: number }) {
   const R = 6378137;
@@ -235,38 +244,15 @@ export async function lookupJurisdictionPoint102100(x: number, y: number): Promi
 
 export async function lookupCityZoning(id: string, provider: CityProvider) {
   if (provider.method !== "arcgis_query") {
-    return {
-      card: {
-        type: "zoning",
-        title: "Zoning (City)",
-        body: "Viewer only.",
-        links: "viewer" in provider ? { viewer: provider.viewer } : undefined,
-      },
-    };
+    return { card: { type: "zoning", title: "Zoning (City)", body: "Viewer only.", links: { viewer: provider.viewer } } };
   }
 
   const parcel = await getParcelByAINorAPN(id);
-  if (!parcel?.geometry)
-    return {
-      card: {
-        type: "zoning",
-        title: "Zoning (City)",
-        body: "Parcel geometry not found.",
-      },
-    };
+  if (!parcel?.geometry) return { card: { type: "zoning", title: "Zoning (City)", body: "Parcel geometry not found." } };
 
   const centroid = makeCentroidFromGeom(parcel.geometry);
-  if (!centroid) {
-    // This case should be rare, but handle it.
-    return {
-      card: {
-        type: "zoning",
-        title: "Zoning (City)",
-        body: "Could not compute parcel centroid.",
-      },
-    };
-  }
-  
+  if (!centroid) return { card: { type: "zoning", title: "Zoning (City)", body: "Failed to compute centroid." } };
+
   const r = await esriQuery(provider.zoning.url, {
     returnGeometry: "false",
     inSR: "102100",
@@ -278,31 +264,12 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
 
   const a = r?.features?.[0]?.attributes ?? null;
   if (!a) {
-    return {
-      card: {
-        type: "zoning",
-        title: "Zoning (City)",
-        body: "No zoning feature found at the city service for this parcel.",
-        links: provider.viewer ? { viewer: provider.viewer } : undefined,
-      },
-    };
+    return { card: { type: "zoning", title: "Zoning (City)", body: "No zoning feature found.", links: provider.viewer ? { viewer: provider.viewer } : undefined } };
   }
 
-  const pick = (keys?: string[]) =>
-    keys?.find((k) => a[k] != null)
-      ? String(a[keys.find((k) => a[k] != null)!])
-      : null;
-  const fields = provider.zoning.fields || {};
-  const zone = pick(fields.zone || ["ZONE", "ZONING", "ZONE_CODE", "ZN_CODE"]);
-  const desc = pick(fields.desc || ["Z_DESC", "ZONE_DESC", "DESCRIPT"]);
-  const label = zone
-    ? desc
-      ? `${zone} — ${desc}`
-      : zone
-    : Object.keys(a)
-        .slice(0, 2)
-        .map((k) => `${k}:${a[k]}`)
-        .join(", ");
+  const name = firstFieldValue(a, provider.zoning.nameFields ?? "ZONE,ZONING,ZONE_CODE");
+  const desc = firstFieldValue(a, provider.zoning.descFields ?? "Z_DESC,ZONE_DESC,DESCRIPT");
+  const label = name ? (desc ? `${name} — ${desc}` : name) : Object.keys(a).slice(0, 2).map(k => `${k}:${a[k]}`).join(", ");
 
   return {
     card: {
@@ -311,7 +278,7 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
       body: label || "Zoning attributes found.",
       raw: a,
       links: provider.viewer ? { viewer: provider.viewer } : undefined,
-    },
+    }
   };
 }
 
@@ -473,6 +440,7 @@ export async function lookupOverlays(id: string) {
   for (const url of endpoints.overlayQueries) {
     // try POINT first (fast & tiny)
     try {
+      if(!centroid) continue;
       const r1 = await esriQuery(url, {
         ...base,
         geometry: JSON.stringify(centroid),
@@ -494,6 +462,7 @@ export async function lookupOverlays(id: string) {
 
     // fallback: ENVELOPE (still small)
     try {
+      if(!envelope) continue;
       const r2 = await esriQuery(url, {
         ...base,
         geometry: JSON.stringify(envelope),
