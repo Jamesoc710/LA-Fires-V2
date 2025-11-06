@@ -1,11 +1,60 @@
-export type CityProviderViewer = { method: "viewer_link"; viewer: string };
-export type CityProviderArcGIS = {
-  method: "arcgis_query";
-  zoning: { url: string; outFields?: string; fields?: Record<string, string[]> };
-  overlays?: Array<{ url: string; outFields?: string }>;
-  viewer?: string;
-};
-export type CityProvider = CityProviderViewer | CityProviderArcGIS;
+// lib/la/providers.ts
+
+/* -------------------------------------------------------------------------- */
+/*                               City Providers                               */
+/* -------------------------------------------------------------------------- */
+
+// City zoning providers can be either a viewer-only link or an ArcGIS query endpoint.
+export type CityProvider =
+  | { method: "viewer_link"; viewer: string }
+  | {
+      method: "arcgis_query";
+      viewer?: string;
+      zoning: {
+        url: string;            // must end in /query
+        outFields?: string;     // default "*"
+        nameFields?: string;    // comma-list fallback: "ZONE,ZONING,ZONE_CODE"
+        descFields?: string;    // fallback list for description
+        categoryFields?: string; // optional fallback list
+      };
+    };
+
+/* -------------------------------------------------------------------------- */
+/*                              Helper Functions                              */
+/* -------------------------------------------------------------------------- */
+
+// Normalize city names for consistent lookups
+export function normalizeCityName(s: string | null | undefined) {
+  if (!s) return "";
+  return s
+    .toLowerCase()
+    .replace(/^city of\s+/i, "")   // "City of Pasadena" -> "Pasadena"
+    .replace(/\s+city$/i, "")      // "Pasadena City" -> "Pasadena"
+    .replace(/[^\p{L}\p{N}\s-]/gu, "") // remove punctuation safely
+    .trim();
+}
+
+// Safely parse CITY_PROVIDERS_JSON and normalize keys
+export function loadCityProvidersSafe(): Record<string, CityProvider> {
+  let raw = (process.env.CITY_PROVIDERS_JSON ?? "{}").trim();
+  const i = raw.indexOf("{");
+  if (i > 0) raw = raw.slice(i);
+  try {
+    const obj = JSON.parse(raw) as Record<string, CityProvider>;
+    const out: Record<string, CityProvider> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[normalizeCityName(k)] = v;
+    }
+    return out;
+  } catch (e) {
+    console.error("[CITY_PROVIDERS_JSON] parse error:", e);
+    return {};
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            Jurisdiction Typing                             */
+/* -------------------------------------------------------------------------- */
 
 export type JurisdictionResult = {
   jurisdiction: string;
@@ -14,17 +63,20 @@ export type JurisdictionResult = {
   note?: string;
 };
 
+/* -------------------------------------------------------------------------- */
+/*                           Provider Lookup Helper                           */
+/* -------------------------------------------------------------------------- */
+
+// Global registry for resolved city providers
 let REGISTRY: Record<string, CityProvider> = {};
 try {
-  const raw = process.env.CITY_PROVIDERS_JSON?.trim();
-  if (raw) REGISTRY = JSON.parse(raw);
-} catch (e) {
-  console.warn("[CITY_PROVIDERS_JSON] parse error:", e);
+  REGISTRY = loadCityProvidersSafe();
+} catch {
+  REGISTRY = {};
 }
 
-const norm = (s: string) => s.replace(/^City of\s+/i, "").trim().toLowerCase();
-
+// Find provider by normalized city name
 export function resolveCityProvider(cityName: string): CityProvider | undefined {
-  const key = norm(cityName);
-  return REGISTRY[cityName] || REGISTRY[key] || REGISTRY[cityName.replace(/^City of\s+/i, "").trim()];
+  const norm = normalizeCityName(cityName);
+  return REGISTRY[norm];
 }
