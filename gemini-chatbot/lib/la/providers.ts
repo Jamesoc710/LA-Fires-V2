@@ -28,9 +28,12 @@ export function normalizeCityName(s: string | null | undefined) {
   if (!s) return "";
   return s
     .toLowerCase()
-    .replace(/^city of\s+/i, "")   // "City of Pasadena" -> "Pasadena"
-    .replace(/\s+city$/i, "")      // "Pasadena City" -> "Pasadena"
-    .replace(/[^\p{L}\p{N}\s-]/gu, "") // remove punctuation safely
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^city of\s+/i, "")           // "City of Pasadena" -> "Pasadena"
+    .replace(/\s+city$/i, "")              // "Pasadena City" -> "Pasadena"
+    .replace(/^los angeles city$/, "los angeles") // rare variant
+    .replace(/[^\p{L}\p{N}\s-]/gu, "")     // remove punctuation safely
     .trim();
 }
 
