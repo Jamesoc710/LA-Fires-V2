@@ -54,6 +54,47 @@ export function loadCityProvidersSafe(): Record<string, CityProvider> {
     return {};
   }
 }
+/* -------------------------------------------------------------------------- */
+/*                     City Provider Lookup + Debug Helper                    */
+/* -------------------------------------------------------------------------- */
+
+export const cityProviders = loadCityProvidersSafe();
+
+/**
+ * Get a city provider safely, using normalization and fuzzy matching.
+ */
+export function getCityProvider(
+  cityName: string | null | undefined
+): CityProvider | undefined {
+  if (!cityName) return undefined;
+  const norm = normalizeCityName(cityName);
+
+  // 1. Direct match
+  if (cityProviders[norm]) return cityProviders[norm];
+
+  // 2. Fuzzy / alias match (e.g., "city of pasadena" vs "pasadena")
+  const key = Object.keys(cityProviders).find(
+    (k) => norm.includes(k) || k.includes(norm)
+  );
+  if (key) return cityProviders[key];
+
+  // 3. Not found
+  return undefined;
+}
+
+/**
+ * Log available cities and normalization result for debugging.
+ */
+export function debugProvidersLog(cityName: string | null | undefined) {
+  console.log("[CITY ROUTER]", {
+    input: cityName,
+    normalized: normalizeCityName(cityName ?? ""),
+    availableKeys: Object.keys(cityProviders),
+    matched: !!getCityProvider(cityName ?? ""),
+  });
+}
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                            Jurisdiction Typing                             */
@@ -78,8 +119,9 @@ try {
   REGISTRY = {};
 }
 
+
 // Find provider by normalized city name
 export function resolveCityProvider(cityName: string): CityProvider | undefined {
-  const norm = normalizeCityName(cityName);
-  return REGISTRY[norm];
+  return getCityProvider(cityName);
 }
+
