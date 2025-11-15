@@ -227,20 +227,48 @@ if (apn) {
     }
 
     // --- CITY OVERLAYS (now live; falls back gracefully) ---
-    if (SHOW_OVERLAYS) {
-      if (provider && provider.method === "arcgis_query" && Array.isArray(provider.overlays) && provider.overlays.length > 0) {
-        // Ensure we have centroid in 102100
-        const centroid = makeCentroidFromGeom(parcel.geometry);
-        const { overlays } = await lookupCityOverlays(centroid, provider.overlays);
-        toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({ count: overlays.length, items: overlays }, null, 2)}`;
-      } else {
-        toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-          note: "City parcel; use the city's GIS for overlays/specific plans.",
+ if (SHOW_OVERLAYS) {
+  if (
+    provider &&
+    provider.method === "arcgis_query" &&
+    Array.isArray(provider.overlays) &&
+    provider.overlays.length > 0
+  ) {
+    // Ensure we have centroid in 102100
+    const centroid = makeCentroidFromGeom(parcel.geometry);
+
+    if (centroid) {
+      const { overlays } = await lookupCityOverlays(centroid, provider.overlays);
+      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+        { count: overlays.length, items: overlays },
+        null,
+        2
+      )}`;
+    } else {
+      // Fallback if centroid could not be computed
+      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+        {
+          note: "Failed to compute centroid for city overlays; use the city's GIS viewer.",
           city: cityName,
           viewer: provider && "viewer" in provider ? provider.viewer : null,
-        }, null, 2)}`;
-      }
+        },
+        null,
+        2
+      )}`;
     }
+  } else {
+    toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+      {
+        note: "City parcel; use the city's GIS for overlays/specific plans.",
+        city: cityName,
+        viewer: provider && "viewer" in provider ? provider.viewer : null,
+      },
+      null,
+      2
+    )}`;
+  }
+}
+
 
     // --- ASSESSOR (still County-wide) ---
     if (SHOW_ASSESSOR) {
