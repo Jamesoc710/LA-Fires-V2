@@ -11,12 +11,20 @@ export type CityProvider =
       method: "arcgis_query";
       viewer?: string;
       zoning: {
-        url: string;            // must end in /query
-        outFields?: string;     // default "*"
-        nameFields?: string;    // comma-list fallback: "ZONE,ZONING,ZONE_CODE"
-        descFields?: string;    // fallback list for description
+        url: string; // must end in /query
+        outFields?: string; // default "*"
+        nameFields?: string; // comma-list fallback: "ZONE,ZONING,ZONE_CODE"
+        descFields?: string; // fallback list for description
         categoryFields?: string; // optional fallback list
       };
+      overlays?: Array<{
+        label: string;
+        url: string; // Either FeatureServer root OR full .../0/query
+        sublayers?: number[]; // If present, build .../{id}/query
+        outFields?: string;
+        nameFields?: string; // optional display
+        descFields?: string; // optional display
+      }>;
     };
 
 /* -------------------------------------------------------------------------- */
@@ -30,10 +38,10 @@ export function normalizeCityName(s: string | null | undefined) {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^city of\s+/i, "")           // "City of Pasadena" -> "Pasadena"
-    .replace(/\s+city$/i, "")              // "Pasadena City" -> "Pasadena"
+    .replace(/^city of\s+/i, "") // "City of Pasadena" -> "Pasadena"
+    .replace(/\s+city$/i, "") // "Pasadena City" -> "Pasadena"
     .replace(/^los angeles city$/, "los angeles") // rare variant
-    .replace(/[^\p{L}\p{N}\s-]/gu, "")     // remove punctuation safely
+    .replace(/[^\p{L}\p{N}\s-]/gu, "") // remove punctuation safely
     .trim();
 }
 
@@ -124,4 +132,3 @@ try {
 export function resolveCityProvider(cityName: string): CityProvider | undefined {
   return getCityProvider(cityName);
 }
-
