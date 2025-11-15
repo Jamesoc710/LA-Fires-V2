@@ -282,6 +282,106 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
   };
 }
 
+// ----------------------------- CITY OVERLAYS -----------------------------
+type ArcgisPoint102100 = { x: number; y: number; spatialReference: { wkid: 102100 } };
+
+type OverlayBundle = {
+  label: string;
+  url: string;            // FeatureServer root OR .../{layerId}/query
+  sublayers?: number[];   // when present, loop these ids -> .../{id}/query
+  outFields?: string;
+  nameFields?: string;    // CSV: "NAME,TITLE,..."
+  descFields?: string;    // CSV: "DESCRIPTIO,TYPE,..."
+};
+
+type OverlayHit = {
+  label: string;
+  layer?: string;
+  attributes: Record<string, any>;
+  summary?: string;
+};
+
+const OVERLAY_BASE_PARAMS = {
+  returnGeometry: "false",
+  inSR: "102100",
+  spatialRel: "esriSpatialRelIntersects",
+};
+
+function pickField(a: Record<string, any>, csv?: string) {
+  if (!a || !csv) return undefined;
+  for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
+    if (k in a && a[k] != null && String(a[k]).trim() !== "") return String(a[k]);
+  }
+  return undefined;
+}
+
+function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string, descCsv?: string) {
+  if (!a) return undefined;
+  const name = pickField(a, nameCsv) ??
+               pickField(a, "NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME");
+  const desc = pickField(a, descCsv) ??
+               pickField(a, "DESCRIPTIO,NOTES,TYPE,CATEGORY");
+  if (name && desc) return `${name} — ${desc}`;
+  if (name) return name;
+  return undefined;
+}
+
+/** Query city overlays at a parcel centroid (102100). */
+export async function lookupCityOverlays(
+  centroid102100: ArcgisPoint102100,
+  bundles: OverlayBundle[]
+): Promise<{ overlays: OverlayHit[]; note?: string }> {
+  const results: OverlayHit[] = [];
+
+  for (const b of bundles || []) {
+    try {
+      // Case A: explicit .../0/query style (HPOZ or single-layer URLs)
+      if (!b.sublayers?.length) {
+        const r = await esriQuery(b.url, {
+          ...OVERLAY_BASE_PARAMS,
+          outFields: b.outFields || "*",
+          geometryType: "esriGeometryPoint",
+          geometry: JSON.stringify(centroid102100),
+        });
+        const feat = r?.features?.[0]?.attributes;
+        if (feat) {
+          results.push({
+            label: b.label,
+            attributes: feat,
+            summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
+          });
+        }
+        continue;
+      }
+
+      // Case B: FeatureServer root + sublayer IDs (SUD bundle)
+      for (const id of b.sublayers) {
+        const layerUrl = `${b.url.replace(/\/+$/,"")}/${id}/query`;
+        const r = await esriQuery(layerUrl, {
+          ...OVERLAY_BASE_PARAMS,
+          outFields: b.outFields || "*",
+          geometryType: "esriGeometryPoint",
+          geometry: JSON.stringify(centroid102100),
+        });
+        const feat = r?.features?.[0]?.attributes;
+        if (feat) {
+          results.push({
+            label: b.label,
+            layer: String(id),
+            attributes: feat,
+            summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
+          });
+        }
+      }
+    } catch (e) {
+      console.log("[OVERLAYS] bundle error:", b.label, String(e));
+    }
+  }
+
+  return { overlays: results };
+}
+
+
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 
 export async function lookupZoning(id: string) {
