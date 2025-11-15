@@ -136,14 +136,19 @@ function makeEnvelopeFromGeom(geom: any) {
     spatialReference: { wkid: 102100 },
   };
 }
+export type ArcgisPoint102100 = {
+  x: number;
+  y: number;
+  spatialReference: { wkid: 102100 };
+};
 
-export function makeCentroidFromGeom(geom: any) {
+export function makeCentroidFromGeom(geom: any): ArcgisPoint102100 | null {
   const env = makeEnvelopeFromGeom(geom);
   if (!env) return null;
   return {
     x: (env.xmin + env.xmax) / 2,
     y: (env.ymin + env.ymax) / 2,
-    spatialReference: { wkid: 102100 },
+    spatialReference: { wkid: 102100 as 102100 }, // 👈 literal type
   };
 }
 
@@ -283,7 +288,7 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
 }
 
 // ----------------------------- CITY OVERLAYS -----------------------------
-type ArcgisPoint102100 = { x: number; y: number; spatialReference: { wkid: 102100 } };
+// type ArcgisPoint102100 = { x: number; y: number; spatialReference: { wkid: 102100 } };
 
 type OverlayBundle = {
   label: string;
