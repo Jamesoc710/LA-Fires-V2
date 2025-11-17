@@ -384,7 +384,7 @@ export async function lookupCityOverlays(
     }
   }
 
-  // 🔹 Dedupe overlays so "SUD: Downtown" only shows once
+    //  Dedupe overlays so "SUD: Downtown" only shows once
   const dedupMap = new Map<string, OverlayHit>();
 
   for (const o of results) {
@@ -397,32 +397,43 @@ export async function lookupCityOverlays(
   }
 
   const dedupedHits = Array.from(dedupMap.values());
+
   const deduped: OverlayCard[] = dedupedHits.map((hit) => {
-    const feat = hit.attributes;
-    if (hit.label === "SUD") {
+    const feat = hit.attributes ?? {};
+    const label = hit.label ?? "";
+    const summary = hit.summary ?? undefined;
+
+    // Default values shared across programs
+    const base = {
+      source: "LA City" as const,
+      name: summary || label,
+      details: summary,
+      attributes: feat,
+    };
+
+    // Try to classify program from the label
+    if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
       return {
-        source: "LA City",
+        ...base,
         program: "SUD",
-        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? hit.label,
-        details: summarizeOverlayAttrs(feat, undefined, undefined),
-        attributes: feat,
+        // For SUD we can prefer district / overlay name if present
+        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
       };
     }
-    if (hit.label === "HPOZ") {
+
+    if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
       return {
-        source: "LA City",
+        ...base,
         program: "HPOZ",
         name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
-        details: feat.DESCRIPTIO ?? undefined,
-        attributes: feat,
+        details: feat.DESCRIPTIO ?? base.details,
       };
     }
-    // Fallback for other city overlays
+
+    //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
     return {
-      source: "LA City",
-      program: hit.label,
-      name: summarizeOverlayAttrs(feat, undefined, undefined) ?? hit.label,
-      attributes: feat,
+      ...base,
+      program: "Other",
     };
   });
 
