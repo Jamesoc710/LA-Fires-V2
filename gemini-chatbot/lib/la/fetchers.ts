@@ -383,7 +383,21 @@ export async function lookupCityOverlays(
     }
   }
 
-  return { overlays: results };
+  // 🔹 Dedupe overlays so "SUD: Downtown" only shows once
+  const dedupMap = new Map<string, OverlayHit>();
+
+  for (const o of results) {
+    // use label + summary as the key; you could also use label + layer + summary if you ever
+    // want separate entries per layer, but same “Downtown” should collapse:
+    const key = `${o.label}::${o.summary ?? ""}`;
+    if (!dedupMap.has(key)) {
+      dedupMap.set(key, o);
+    }
+  }
+
+  const deduped = Array.from(dedupMap.values());
+
+  return { overlays: deduped };
 }
 
 
