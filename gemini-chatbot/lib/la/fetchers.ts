@@ -2,6 +2,7 @@
 import { endpoints } from "./endpoints";
 import type { CityProvider, JurisdictionResult } from "./providers";
 import { normalizeCityName } from "./providers";
+import type { OverlayCard } from "./types";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -335,7 +336,7 @@ function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string,
 export async function lookupCityOverlays(
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
-): Promise<{ overlays: OverlayHit[]; note?: string }> {
+): Promise<{ overlays: OverlayCard[]; note?: string }> {
   const results: OverlayHit[] = [];
 
   for (const b of bundles || []) {
@@ -395,7 +396,35 @@ export async function lookupCityOverlays(
     }
   }
 
-  const deduped = Array.from(dedupMap.values());
+  const dedupedHits = Array.from(dedupMap.values());
+  const deduped: OverlayCard[] = dedupedHits.map((hit) => {
+    const feat = hit.attributes;
+    if (hit.label === "SUD") {
+      return {
+        source: "LA City",
+        program: "SUD",
+        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? hit.label,
+        details: summarizeOverlayAttrs(feat, undefined, undefined),
+        attributes: feat,
+      };
+    }
+    if (hit.label === "HPOZ") {
+      return {
+        source: "LA City",
+        program: "HPOZ",
+        name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
+        details: feat.DESCRIPTIO ?? undefined,
+        attributes: feat,
+      };
+    }
+    // Fallback for other city overlays
+    return {
+      source: "LA City",
+      program: hit.label,
+      name: summarizeOverlayAttrs(feat, undefined, undefined) ?? hit.label,
+      attributes: feat,
+    };
+  });
 
   return { overlays: deduped };
 }
@@ -527,11 +556,13 @@ export async function lookupZoning(id: string) {
 }
 
 /*------OVERLAY LOOKUP--------*/
-export async function lookupOverlays(id: string) {
+export async function lookupOverlays(
+  apn: string
+): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string, links?: { znet?: string } }> {
   // 1) get parcel geometry
-  const parcel = await getParcelByAINorAPN(id);
+  const parcel = await getParcelByAINorAPN(apn);
   if (!parcel?.geometry) {
-    return { overlays: [], note: "Parcel geometry not found for this APN/AIN." };
+    return { input: { apn }, overlays: [], note: "Parcel geometry not found for this APN/AIN." };
   }
 
   // use a tiny payload for reliability (point); fallback to envelope if needed
@@ -546,62 +577,64 @@ export async function lookupOverlays(id: string) {
     outFields: "*",              // best shot; fields vary by layer
   };
 
-  const results: Array<{
-    url: string;
-    ok: boolean;
-    method: "point" | "envelope";
-    attributes?: Record<string, any> | null;
-    rawCount?: number;
-    error?: string;
-    label?: string;
-  }> = [];
+  const results: OverlayCard[] = [];
 
   for (const url of endpoints.overlayQueries) {
-    // try POINT first (fast & tiny)
+    let attrs: Record<string, any> | null = null;
     try {
-      if(!centroid) continue;
-      const r1 = await esriQuery(url, {
-        ...base,
-        geometry: JSON.stringify(centroid),
-        geometryType: "esriGeometryPoint",
-      });
-      const attrs = r1.features?.[0]?.attributes ?? null;
-      results.push({
-        url,
-        ok: Boolean(attrs),
-        method: "point",
-        attributes: attrs,
-        rawCount: Array.isArray(r1.features) ? r1.features.length : undefined,
-        label: summarizeOverlay(attrs),
-      });
-      continue;
-    } catch (e) {
-      // fall through to envelope
-    }
+      // try POINT first (fast & tiny)
+      if (centroid) {
+        const r1 = await esriQuery(url, {
+          ...base,
+          geometry: JSON.stringify(centroid),
+          geometryType: "esriGeometryPoint",
+        });
+        attrs = r1.features?.[0]?.attributes ?? null;
+      }
+      
+      // fallback: ENVELOPE (if point fails or returns nothing)
+      if (!attrs && envelope) {
+        const r2 = await esriQuery(url, {
+          ...base,
+          geometry: JSON.stringify(envelope),
+          geometryType: "esriGeometryEnvelope",
+        });
+        attrs = r2.features?.[0]?.attributes ?? null;
+      }
 
-    // fallback: ENVELOPE (still small)
-    try {
-      if(!envelope) continue;
-      const r2 = await esriQuery(url, {
-        ...base,
-        geometry: JSON.stringify(envelope),
-        geometryType: "esriGeometryEnvelope",
-      });
-      const attrs = r2.features?.[0]?.attributes ?? null;
-      results.push({
-        url,
-        ok: Boolean(attrs),
-        method: "envelope",
-        attributes: attrs,
-        rawCount: Array.isArray(r2.features) ? r2.features.length : undefined,
-        label: summarizeOverlay(attrs),
-      });
+      if (attrs) {
+        // Simplified logic to determine program based on known fields
+        let program = "Unknown";
+        let name = "Unknown Overlay";
+        let details: string | undefined = undefined;
+
+        if (attrs.CSD_NAME) {
+          program = "CSD";
+          name = attrs.CSD_NAME ?? "Unnamed CSD";
+          details = attrs.TITLE22 ?? undefined;
+        } else if (attrs.SEA_NAME) {
+          program = "SEA";
+          name = attrs.SEA_NAME ?? "Unnamed SEA";
+          details = attrs.Type ?? undefined;
+        } else if (attrs.DISTRICT) {
+          program = "District";
+          name = attrs.DISTRICT;
+        }
+        
+        results.push({
+          source: "County",
+          program: program,
+          name: name,
+          details: details,
+          attributes: attrs,
+        });
+      }
     } catch (e) {
-      results.push({ url, ok: false, method: "envelope", error: String(e) });
+      console.log(`[OVERLAYS] query failed for ${url}`, String(e));
     }
   }
 
-  return { overlays: results };
+  return { input: { apn }, overlays: results, links: { znet: endpoints.znetViewer } };
 }
 
 /** Attempt to make a short human label from whatever fields the layer has. */
