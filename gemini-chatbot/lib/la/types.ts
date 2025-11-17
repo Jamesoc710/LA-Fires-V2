@@ -25,3 +25,28 @@ export type AssessorResult = {
   yearBuilt?: number;
   links: { assessor?: string };
 };
+
+// ---------------------------------------------------------
+// Overlay cards (shared format for County + LA City)
+// ---------------------------------------------------------
+
+export type OverlaySource = "County" | "LA City";
+
+export type OverlayProgram = "CSD" | "SUD" | "HPOZ" | "Other";
+
+export type OverlayCard = {
+  /** Where this overlay came from (DRP vs City) */
+  source: OverlaySource;
+
+  /** Program family, e.g. County CSD or City SUD/HPOZ */
+  program: OverlayProgram;
+
+  /** Human-readable name, e.g. "Hillside", "Downtown", "Angelino Heights" */
+  name: string;
+
+  /** Optional one-line description / extra detail */
+  details?: string;
+
+  /** Raw attributes from the GIS feature */
+  attributes: Record<string, any>;
+};
