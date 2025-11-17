@@ -2,7 +2,7 @@
 import { endpoints } from "./endpoints";
 import type { CityProvider, JurisdictionResult } from "./providers";
 import { normalizeCityName } from "./providers";
-import type { OverlayCard } from "./types";
+import type { OverlayCard, OverlayProgram } from "./types";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -569,11 +569,15 @@ export async function lookupZoning(id: string) {
 /*------OVERLAY LOOKUP--------*/
 export async function lookupOverlays(
   apn: string
-): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string, links?: { znet?: string } }> {
+): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string; links?: { znet?: string } }> {
   // 1) get parcel geometry
   const parcel = await getParcelByAINorAPN(apn);
   if (!parcel?.geometry) {
-    return { input: { apn }, overlays: [], note: "Parcel geometry not found for this APN/AIN." };
+    return {
+      input: { apn },
+      overlays: [],
+      note: "Parcel geometry not found for this APN/AIN.",
+    };
   }
 
   // use a tiny payload for reliability (point); fallback to envelope if needed
@@ -585,13 +589,14 @@ export async function lookupOverlays(
     returnGeometry: "false",
     inSR: "102100",
     spatialRel: "esriSpatialRelIntersects",
-    outFields: "*",              // best shot; fields vary by layer
+    outFields: "*", // best shot; fields vary by layer
   };
 
   const results: OverlayCard[] = [];
 
   for (const url of endpoints.overlayQueries) {
     let attrs: Record<string, any> | null = null;
+
     try {
       // try POINT first (fast & tiny)
       if (centroid) {
@@ -602,7 +607,7 @@ export async function lookupOverlays(
         });
         attrs = r1.features?.[0]?.attributes ?? null;
       }
-      
+
       // fallback: ENVELOPE (if point fails or returns nothing)
       if (!attrs && envelope) {
         const r2 = await esriQuery(url, {
@@ -613,39 +618,56 @@ export async function lookupOverlays(
         attrs = r2.features?.[0]?.attributes ?? null;
       }
 
-      if (attrs) {
-        // Simplified logic to determine program based on known fields
-        let program = "Unknown";
-        let name = "Unknown Overlay";
-        let details: string | undefined = undefined;
+      if (!attrs) continue;
 
-        if (attrs.CSD_NAME) {
-          program = "CSD";
-          name = attrs.CSD_NAME ?? "Unnamed CSD";
-          details = attrs.TITLE22 ?? undefined;
-        } else if (attrs.SEA_NAME) {
-          program = "SEA";
-          name = attrs.SEA_NAME ?? "Unnamed SEA";
-          details = attrs.Type ?? undefined;
-        } else if (attrs.DISTRICT) {
-          program = "District";
-          name = attrs.DISTRICT;
-        }
-        
-        results.push({
-          source: "County",
-          program: program,
-          name: name,
-          details: details,
-          attributes: attrs,
-        });
+      // ─────────────────────────────────────────────
+      // Normalize into OverlayCard
+      // ─────────────────────────────────────────────
+
+      // 1) Program (must be OverlayProgram)
+      let program: OverlayProgram = "Other"; // default
+
+      if (attrs.CSD_NAME) {
+        // County Community Standards District
+        program = "CSD";
       }
+      // If you later add other County overlay types you can extend this:
+      // else if (attrs.SEA_NAME) { program = "Other"; /* keep as Other for now */ }
+
+      // 2) Name
+      let name =
+        attrs.CSD_NAME ??
+        attrs.SEA_NAME ??
+        attrs.DISTRICT ??
+        summarizeOverlay(attrs) ??
+        "County overlay";
+
+      // 3) Details (optional)
+      let details: string | undefined = undefined;
+
+      if (attrs.TITLE22) {
+        details = attrs.TITLE22;
+      } else if (attrs.Type) {
+        details = attrs.Type;
+      }
+
+      results.push({
+        source: "County",
+        program,
+        name,
+        details,
+        attributes: attrs,
+      });
     } catch (e) {
       console.log(`[OVERLAYS] query failed for ${url}`, String(e));
     }
   }
 
-  return { input: { apn }, overlays: results, links: { znet: endpoints.znetViewer } };
+  return {
+    input: { apn },
+    overlays: results,
+    links: { znet: endpoints.znetViewer },
+  };
 }
 
 /** Attempt to make a short human label from whatever fields the layer has. */
