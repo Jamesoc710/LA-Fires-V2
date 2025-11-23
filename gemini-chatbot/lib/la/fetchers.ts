@@ -334,6 +334,7 @@ function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string,
 
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
+  cityName: string,                 
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
 ): Promise<{ overlays: OverlayCard[]; note?: string }> {
@@ -360,7 +361,7 @@ export async function lookupCityOverlays(
         continue;
       }
 
-      // Case B: FeatureServer root + sublayer IDs (SUD bundle)
+      // Case B: FeatureServer root + sublayer IDs (SUD bundle, Pasadena bundles, etc.)
       for (const id of b.sublayers) {
         const layerUrl = `${b.url.replace(/\/+$/,"")}/${id}/query`;
         const r = await esriQuery(layerUrl, {
@@ -384,7 +385,7 @@ export async function lookupCityOverlays(
     }
   }
 
-    //  Dedupe overlays so "SUD: Downtown" only shows once
+  //  Dedupe overlays so "SUD: Downtown" only shows once
   const dedupMap = new Map<string, OverlayHit>();
 
   for (const o of results) {
@@ -398,48 +399,66 @@ export async function lookupCityOverlays(
 
   const dedupedHits = Array.from(dedupMap.values());
 
-  const deduped: OverlayCard[] = dedupedHits.map((hit) => {
-    const feat = hit.attributes ?? {};
-    const label = hit.label ?? "";
-    const summary = hit.summary ?? undefined;
+  const deduped: OverlayCard[] = dedupedHits
+    .map((hit) => {
+      const feat = hit.attributes ?? {};
+      const label = hit.label ?? "";
+      const summary = hit.summary ?? undefined;
 
-    // Default values shared across programs
-    const base = {
-      source: "LA City" as const,
-      name: summary || label,
-      details: summary,
-      attributes: feat,
-    };
+      // For Pasadena "Zoning Overlays" layer, skip entries that only contain base zoning
+      if (
+        label.includes("Zoning Overlays") &&
+        !(
+          feat.OVERLAY_DESC ||
+          feat.OVERLAY ||
+          feat.OVERLAY_NAME ||
+          feat.SPECIFICPLAN ||
+          feat.SPECIFIC_PLAN ||
+          feat.SPEC_PLAN
+        )
+      ) {
+        // No real overlay info, just base zone -> don't create a card
+        return null;
+      }
 
-    // Try to classify program from the label
-    if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
+      // Default values shared across programs
+      const base = {
+        source: cityName,      // <-- now dynamic: "Los Angeles", "Pasadena", etc.
+        name: summary || label,
+        details: summary,
+        attributes: feat,
+      };
+
+      // Try to classify program from the label
+      if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
+        return {
+          ...base,
+          program: "SUD",
+          // For SUD we can prefer district / overlay name if present
+          name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
+        };
+      }
+
+      if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
+        return {
+          ...base,
+          program: "HPOZ",
+          name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
+          details: feat.DESCRIPTIO ?? base.details,
+        };
+      }
+
+      //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
       return {
         ...base,
-        program: "SUD",
-        // For SUD we can prefer district / overlay name if present
-        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
+        program: "Other",
       };
-    }
-
-    if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
-      return {
-        ...base,
-        program: "HPOZ",
-        name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
-        details: feat.DESCRIPTIO ?? base.details,
-      };
-    }
-
-    //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
-    return {
-      ...base,
-      program: "Other",
-    };
-  });
+    })
+    // Drop any nulls (e.g., base-zoning-only hits from "Zoning Overlays")
+    .filter((card): card is OverlayCard => card !== null);
 
   return { overlays: deduped };
 }
-
 
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 
