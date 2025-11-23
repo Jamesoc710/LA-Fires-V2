@@ -15,6 +15,10 @@ type EndpointMap = Readonly<{
   OVERLAY_QUERY_4?: string;
   OVERLAY_QUERY_5?: string;
   OVERLAY_QUERY_6?: string;
+
+  FIRE_HAZARD_ZONES_QUERY?: string;
+  HILLSIDE_OVERLAY_QUERY?: string;
+  FLOOD_100YR_QUERY?: string;
 }>;
 
 const env = (k: string, fallback = "") => (process.env[k] || fallback).trim();
@@ -47,6 +51,9 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
   OVERLAY_QUERY_4: env("OVERLAY_QUERY_4"),
   OVERLAY_QUERY_5: env("OVERLAY_QUERY_5"),
   OVERLAY_QUERY_6: env("OVERLAY_QUERY_6"),
+  FIRE_HAZARD_ZONES_QUERY: env("FIRE_HAZARD_ZONES_QUERY"),
+  HILLSIDE_OVERLAY_QUERY: env("HILLSIDE_OVERLAY_QUERY"),
+  FLOOD_100YR_QUERY: env("FLOOD_100YR_QUERY"),
 });
 
 export const endpoints = {
@@ -62,6 +69,10 @@ export const endpoints = {
     ENDPOINTS.OVERLAY_QUERY_4,
     ENDPOINTS.OVERLAY_QUERY_5,
     ENDPOINTS.OVERLAY_QUERY_6,
+
+    ENDPOINTS.FIRE_HAZARD_ZONES_QUERY,
+    ENDPOINTS.HILLSIDE_OVERLAY_QUERY,
+    ENDPOINTS.FLOOD_100YR_QUERY,
   ].filter(Boolean) as string[],
 
   znetViewer: ENDPOINTS.ZNET_VIEWER,
