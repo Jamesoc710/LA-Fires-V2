@@ -334,7 +334,6 @@ function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string,
 
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
-  cityName: string,                 // <-- NEW
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
 ): Promise<{ overlays: OverlayCard[]; note?: string }> {
@@ -423,7 +422,7 @@ export async function lookupCityOverlays(
 
     // Default values shared across programs
     const base = {
-      source: cityName,      // <-- now dynamic: "Los Angeles", "Pasadena", etc.
+      source: "City" as const,   // <--- key change: generic city source
       name: summary || label,
       details: summary,
       attributes: feat,
@@ -456,12 +455,13 @@ export async function lookupCityOverlays(
   });
 
   // Then filter out the nulls so TS knows this is OverlayCard[]
-  const deduped: OverlayCard[] = mapped.filter(
+  const overlays: OverlayCard[] = mapped.filter(
     (card): card is OverlayCard => card !== null
   );
 
-  return { overlays: deduped };
+  return { overlays };
 }
+
 
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 
