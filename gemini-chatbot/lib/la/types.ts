@@ -30,7 +30,11 @@ export type AssessorResult = {
 // Overlay cards (shared format for County + LA City)
 // ---------------------------------------------------------
 
-export type OverlaySource = "County" | "LA City";
+export type OverlaySource =
+  | "County"
+  | "LA City"
+  | "Pasadena"
+  | "Other City";
 
 export type OverlayProgram = "CSD" | "SUD" | "HPOZ" | "Other";
 
