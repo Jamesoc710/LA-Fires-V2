@@ -227,7 +227,7 @@ if (apn) {
     }
 
     // --- CITY OVERLAYS (now live; falls back gracefully) ---
-// --- CITY OVERLAYS (now live; falls back gracefully) ---
+
 if (SHOW_OVERLAYS) {
   if (
     provider &&
@@ -240,7 +240,7 @@ if (SHOW_OVERLAYS) {
 
     if (centroid) {
       const { overlays, note } = await lookupCityOverlays(
-        cityName,          // <-- NEW: pass the city name
+
         centroid,
         provider.overlays
       );
