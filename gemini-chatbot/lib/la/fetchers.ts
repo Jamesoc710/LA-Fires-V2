@@ -334,7 +334,7 @@ function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string,
 
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
-  cityName: string,                 
+  cityName: string,                 // <-- NEW
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
 ): Promise<{ overlays: OverlayCard[]; note?: string }> {
@@ -399,63 +399,66 @@ export async function lookupCityOverlays(
 
   const dedupedHits = Array.from(dedupMap.values());
 
-  const deduped: OverlayCard[] = dedupedHits
-    .map((hit) => {
-      const feat = hit.attributes ?? {};
-      const label = hit.label ?? "";
-      const summary = hit.summary ?? undefined;
+  // First map to OverlayCard | null
+  const mapped = dedupedHits.map((hit): OverlayCard | null => {
+    const feat = hit.attributes ?? {};
+    const label = hit.label ?? "";
+    const summary = hit.summary ?? undefined;
 
-      // For Pasadena "Zoning Overlays" layer, skip entries that only contain base zoning
-      if (
-        label.includes("Zoning Overlays") &&
-        !(
-          feat.OVERLAY_DESC ||
-          feat.OVERLAY ||
-          feat.OVERLAY_NAME ||
-          feat.SPECIFICPLAN ||
-          feat.SPECIFIC_PLAN ||
-          feat.SPEC_PLAN
-        )
-      ) {
-        // No real overlay info, just base zone -> don't create a card
-        return null;
-      }
+    // For Pasadena "Zoning Overlays" layer, skip entries that only contain base zoning
+    if (
+      label.includes("Zoning Overlays") &&
+      !(
+        feat.OVERLAY_DESC ||
+        feat.OVERLAY ||
+        feat.OVERLAY_NAME ||
+        feat.SPECIFICPLAN ||
+        feat.SPECIFIC_PLAN ||
+        feat.SPEC_PLAN
+      )
+    ) {
+      // No real overlay info, just base zone -> don't create a card
+      return null;
+    }
 
-      // Default values shared across programs
-      const base = {
-        source: cityName,      // <-- now dynamic: "Los Angeles", "Pasadena", etc.
-        name: summary || label,
-        details: summary,
-        attributes: feat,
-      };
+    // Default values shared across programs
+    const base = {
+      source: cityName,      // <-- now dynamic: "Los Angeles", "Pasadena", etc.
+      name: summary || label,
+      details: summary,
+      attributes: feat,
+    };
 
-      // Try to classify program from the label
-      if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
-        return {
-          ...base,
-          program: "SUD",
-          // For SUD we can prefer district / overlay name if present
-          name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
-        };
-      }
-
-      if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
-        return {
-          ...base,
-          program: "HPOZ",
-          name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
-          details: feat.DESCRIPTIO ?? base.details,
-        };
-      }
-
-      //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
+    // Try to classify program from the label
+    if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
       return {
         ...base,
-        program: "Other",
+        program: "SUD",
+        // For SUD we can prefer district / overlay name if present
+        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
       };
-    })
-    // Drop any nulls (e.g., base-zoning-only hits from "Zoning Overlays")
-    .filter((card): card is OverlayCard => card !== null);
+    }
+
+    if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
+      return {
+        ...base,
+        program: "HPOZ",
+        name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
+        details: feat.DESCRIPTIO ?? base.details,
+      };
+    }
+
+    //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
+    return {
+      ...base,
+      program: "Other",
+    };
+  });
+
+  // Then filter out the nulls so TS knows this is OverlayCard[]
+  const deduped: OverlayCard[] = mapped.filter(
+    (card): card is OverlayCard => card !== null
+  );
 
   return { overlays: deduped };
 }
