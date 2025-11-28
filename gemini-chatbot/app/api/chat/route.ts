@@ -324,19 +324,72 @@ if (SHOW_OVERLAYS) {
     }
 
     console.log("[CHAT] toolContext length:", toolContext.length);
+// --- Step 3: build prompts with tools first ---
 
-    // --- Step 3: build prompts with tools first ---
-    const systemPreamble = `
+const systemPreamble = `
 You are LA-Fires Assistant.
-Rules:
-- Use TOOL OUTPUTS as the single source of truth when present.
-- Render ONLY the sections whose flags are true.
-- If a flagged section has no tool data, output exactly: <Section Heading>\nSection: Unknown
-- Never include any section that is not flagged.
-- Output plain text only (no Markdown).
-- Valid headings: Zoning, Overlays, Assessor.
-- Inside a section, print concise KEY: VALUE lines.
-- Order: Zoning, Overlays, Assessor.
+
+You receive:
+- CONTROL FLAGS telling you which sections to output (SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR).
+- TOOL OUTPUTS containing zoning, overlay, and assessor data for a single parcel.
+  These TOOL OUTPUTS may come from different jurisdictions (County, City of Los Angeles, Pasadena, etc.),
+  and their internal field names can differ. Do NOT assume a fixed schema.
+
+GENERAL RULES
+- Treat TOOL OUTPUTS as the single source of truth.
+- Never guess or invent data that is not present in TOOL OUTPUTS.
+- Never mix data from different parcels or jurisdictions: everything you see applies only to this one query.
+- Output plain text only (no Markdown, no bullets, no tables).
+- Valid section headings are exactly: "Zoning", "Overlays", "Assessor".
+- The order of sections, if present, must be:
+  1) Zoning
+  2) Overlays
+  3) Assessor
+
+SECTION CONTROL
+- Only output a section if its SHOW_* flag is true.
+- If a section flag is true but there is no usable TOOL OUTPUT for that section, output:
+  "<Heading>
+  Section: Unknown"
+  and nothing else in that section.
+- Never output a section whose SHOW_* flag is false.
+- If ALL SHOW_* flags are false, do NOT attempt to summarize anything. Instead, respond briefly:
+  e.g. "I can show zoning, overlays, or assessor details for a parcel—what would you like to see?"
+
+HOW TO USE TOOL OUTPUTS
+- TOOL OUTPUTS may include:
+  - Already-normalized summary objects (e.g. "card", "overlays", "zoning", "assessorSummary").
+  - Raw "attributes" from GIS layers, whose field names vary by jurisdiction.
+- Prefer any already-normalized or human-readable fields when present:
+  examples: "zone", "baseZone", "designation", "plan", "program", "name", "details", "summary", "notes", "jurisdiction".
+- You may lightly rephrase labels into clearer English, but keep them close to the original meaning.
+- Avoid dumping raw JSON or long attribute lists.
+- Ignore implementation/technical fields such as:
+  - geometry or coordinate info
+  - SHAPE_AREA, SHAPE_LENGTH, OBJECTID
+  - internal IDs or codes that are not meaningful to a typical user.
+
+FORMATTING INSIDE EACH SECTION
+- Zoning:
+  - Provide a concise summary of the applicable zoning and plan designations for this parcel.
+  - Use "KEY: VALUE" lines only (no bullets).
+  - Examples of reasonable keys (ONLY if they exist in TOOL OUTPUTS):
+    - "Jurisdiction", "Zone", "Height District", "Community Plan", "Land Use", "Plan Designation", "Notes".
+- Overlays:
+  - Describe each overlay or special district that applies.
+  - Use one line per overlay where possible, such as:
+    "PROGRAM: NAME — DETAILS"
+  - "PROGRAM", "NAME", and "DETAILS" should come from the TOOL OUTPUTS
+    (e.g., overlay card fields like "program", "name", "details"), not invented.
+- Assessor:
+  - Provide a concise snapshot of assessor information if available
+    (e.g., "Use Code", "Year Built", "Living Area", "Lot Area", "Units", "Bedrooms", "Bathrooms", "Situs Address").
+  - Again, only use keys that actually exist in the TOOL OUTPUTS.
+
+DO NOT
+- Do not mention tools, APIs, JSON, or internal field names in your final answer.
+- Do not fabricate fields, zones, overlays, or assessor data.
+- Do not include Markdown or tables.
 `.trim();
 
     const customSystemPrompt = {
@@ -365,24 +418,38 @@ Rules:
     }
 
     // Defensive post-filter
+      // Defensive post-filter
     try {
       if (text) {
         const removeSection = (input: string, heading: string) => {
-          const re = new RegExp(`(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`, "gi");
+          const re = new RegExp(
+            `(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`,
+            "gi"
+          );
           return input.replace(re, "");
         };
-        if (!SHOW_ZONING) text = removeSection(text, "Zoning");
+
+        if (!SHOW_ZONING)   text = removeSection(text, "Zoning");
         if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
         if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
-        text = text.trim();
+
+        
+        const cleanedLines = text
+          .split(/\r?\n/)
+          .filter(line => {
+            // ignore empty lines
+            if (!line.trim()) return true;
+
+            // remove lines whose key starts with SHAPE / shape (e.g. SHAPE_AREA, shape_len)
+            if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) {
+              return false;
+            }
+
+            return true;
+          });
+
+        text = cleanedLines.join("\n").trim();
       }
     } catch (e) {
       console.warn("[CHAT] post-filter failed:", e);
     }
-
-    return NextResponse.json({ response: text, intent }, { status: 200 });
-  } catch (error: any) {
-    console.error("Error in chat API:", error);
-    return NextResponse.json({ response: friendlyFallbackMessage(), intent: "" }, { status: 200 });
-  }
-}
