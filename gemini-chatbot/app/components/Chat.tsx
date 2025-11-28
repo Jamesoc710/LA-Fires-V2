@@ -38,13 +38,19 @@ type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
 
 function sectionKindFrom(line: string): SectionKind {
   const s = line.trim().toLowerCase().replace(/\*\*/g, '');
+
   // ignore “section: unknown”
   if (/^section\s*:\s*unknown\b/.test(s)) return null;
 
-  // accept "section: zoning", "zoning:", "zoning"
-  if (/^(section\s*:\s*)?zoning\s*:?\s*$/.test(s)) return 'zoning';
-  if (/^(section\s*:\s*)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
+  // Accept "Zoning", "City Zoning", "Section: Zoning", etc.
+  if (/^(section\s*:\s*)?(city\s+)?zoning\s*:?\s*$/.test(s)) return 'zoning';
+
+  // Accept "Overlays", "City Overlays", "Overlay", etc.
+  if (/^(section\s*:\s*)?(city\s+)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
+
+  // Assessor is usually just "Assessor"
   if (/^(section\s*:\s*)?assessor\s*:?\s*$/.test(s)) return 'assessor';
+
   return null;
 }
 
