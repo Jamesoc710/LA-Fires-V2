@@ -403,6 +403,7 @@ export async function lookupCityOverlays(
     const feat = hit.attributes ?? {};
     const label = hit.label ?? "";
     const summary = hit.summary ?? undefined;
+    const lowerLabel = label.toLowerCase();
 
     // For Pasadena "Zoning Overlays" layer, skip entries that only contain base zoning
     if (
@@ -422,13 +423,65 @@ export async function lookupCityOverlays(
 
     // Default values shared across programs
     const base = {
-      source: "City" as const,   // <--- key change: generic city source
+      source: "City" as const,   // generic city source
       name: summary || label,
       details: summary,
       attributes: feat,
     };
 
-    // Try to classify program from the label
+    // ─────────────────────────────────────────────
+    // LA-specific niceties for non-SUD / non-HPOZ overlays
+    // ─────────────────────────────────────────────
+
+    // General Plan Land Use (LA City)
+    if (lowerLabel.includes("general plan land use")) {
+      const gpluDesc =
+        feat.GPLU_DESC ||
+        feat.LU_LABEL ||
+        summary ||
+        "General Plan Land Use";
+
+      const parts = [
+        gpluDesc,
+        feat.CPA ? `CPA: ${feat.CPA}` : null,
+      ].filter(Boolean);
+
+      return {
+        ...base,
+        program: "Other",
+        name: gpluDesc,
+        details: parts.join(" — ") || base.details,
+      };
+    }
+
+    // Very High Fire Hazard Severity Zones (LA City)
+    if (
+      lowerLabel.includes("very high fire hazard") ||
+      lowerLabel.includes("very_high_fire")
+    ) {
+      const name =
+        "Very High Fire Hazard Severity Zone";
+
+      const details =
+        feat.HAZ_CLASS ||
+        feat.GENERALIZE ||
+        "Parcel is inside the City's Very High Fire Hazard Severity Zone";
+
+      return {
+        ...base,
+        program: "Other",
+        name,
+        details,
+      };
+    }
+
+    // You could add a similar block for Wildfire Evacuation Zones if you like:
+    // if (lowerLabel.includes("wildfire evacuation")) { ... }
+
+    // ─────────────────────────────────────────────
+    // SUD / HPOZ classification
+    // ─────────────────────────────────────────────
+
     if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
       return {
         ...base,
@@ -447,12 +500,13 @@ export async function lookupCityOverlays(
       };
     }
 
-    //  Fallback for other city overlays — MUST be one of the OverlayProgram literals
+    // Fallback for other city overlays — MUST be one of the OverlayProgram literals
     return {
       ...base,
       program: "Other",
     };
   });
+
 
   // Then filter out the nulls so TS knows this is OverlayCard[]
   const overlays: OverlayCard[] = mapped.filter(
