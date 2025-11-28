@@ -78,14 +78,33 @@ function takeSection(lines: string[], startIndex: number): { end: number; data: 
   let i = startIndex + 1;
   while (i < lines.length && !/^\s*(Zoning|Overlays|Assessor)\s*$/i.test(lines[i])) {
     const kv = extractKV(lines[i]);
-    if (kv) {
-      const [k, v] = kv;
-      data[normalizeKey(k)] = v;
-    }
+if (kv) {
+  const [k, v] = kv;
+  addKV(data, k, v);
+}
+
     i++;
   }
   return { end: i, data };
 }
+
+function addKV(data: SectionData, k: string, v: string) {
+  const norm = normalizeKey(k);
+  let key = norm;
+
+  // if this key already exists, add _2, _3, ...
+  if (data[key] !== undefined) {
+    let i = 2;
+    while (data[`${norm}_${i}`] !== undefined) {
+      i++;
+    }
+    key = `${norm}_${i}`;
+  }
+
+  data[key] = v;
+}
+
+
 
 function parseAssistantText(text: string): ParsedReply | null {
   if (!text) return null;
@@ -107,11 +126,12 @@ function parseAssistantText(text: string): ParsedReply | null {
     const data: SectionData = {};
     let j = i + 1;
     while (j < lines.length && sectionKindFrom(lines[j]) === null) {
-      const kv = extractKV(lines[j]);
-      if (kv) {
-        const [k, v] = kv;
-        data[normalizeKey(k)] = v;
-      }
+    const kv = extractKV(lines[j]);
+    if (kv) {
+      const [k, v] = kv;
+      addKV(data, k, v);
+    }
+
       j++;
     }
 
