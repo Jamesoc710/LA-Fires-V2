@@ -330,55 +330,63 @@ if (SHOW_OVERLAYS) {
 
     // --- Step 3: build prompts with tools first ---
 
-    const systemPreamble = `
+const systemPreamble = `
 You are LA-Fires Assistant.
 
-You answer for a **single parcel** at a time and you only use the TOOL OUTPUTS provided.
-
+You answer for a single parcel at a time and you only use the TOOL OUTPUTS provided.
 
 RULES
 - Treat TOOL OUTPUTS as the only source of facts. Do not invent data.
 - Only include a section if its SHOW_* flag is true.
-- If a section flag is true but there is no useful TOOL OUTPUT, output:
-  "<Heading>
-  Section: Unknown"
+- If a section flag is true but there is no useful TOOL OUTPUT, include the heading
+  and then a single line:
+  Section: Unknown
 - Never include a section whose SHOW_* flag is false.
 - Use plain text only (no Markdown, no bullets, no tables).
 - Inside each section, use concise "KEY: VALUE" lines.
 - It is OK to include several important fields; be informative, not ultra-minimal.
 - Prefer human-friendly fields such as: jurisdiction, zone, category, community plan,
   plan designation, program, name, description, SEA_NAME, HAZ_CLASS, CSD_NAME, etc.
-- Do NOT show low-level technical fields such as:
-  SHAPE*, geometry, OBJECTID, internal IDs, or URLs.
+- Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
+  internal IDs, or URLs.
 - Do not mention tools, JSON, or APIs in the final answer.
-    `.trim();
+
+FORMAT
+- Structure your answer into up to three sections, in this order:
+  Zoning
+  Overlays
+  Assessor
+- Put each section heading alone on its own line, exactly as written above.
+- Under each heading, only write KEY: VALUE lines.
+`.trim();
+
     
-        const combinedPrompt = [
-          { role: "user", parts: [{ text: systemPreamble }] },
-          {
-            role: "user",
-            parts: [{
-              text:
-                `CONTROL FLAGS\n` +
-                `SHOW_ZONING: ${SHOW_ZONING}\n` +
-                `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
-                `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
-            }],
-          },
-          { role: "user", parts: [{ text: `Intent: ${intent}` }] },
-          {
-            role: "user",
-            parts: [{
-              text:
-                `=== TOOL OUTPUTS (authoritative) ===\n` +
-                `${toolContext || "(none)"}\n\n` +
-                `=== STATIC CONTEXT (supporting) ===\n` +
-                `${contextData}`.trim()
-            }],
-          },
-      // original user question at the end
-      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-    ];
+const combinedPrompt = [
+  { role: "system", parts: [{ text: systemPreamble }] },
+  {
+    role: "user",
+    parts: [{
+      text:
+        `CONTROL FLAGS\n` +
+        `SHOW_ZONING: ${SHOW_ZONING}\n` +
+        `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
+        `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
+    }],
+  },
+  { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+  {
+    role: "user",
+    parts: [{
+      text:
+        `=== TOOL OUTPUTS (authoritative) ===\n` +
+        `${toolContext || "(none)"}\n\n` +
+        `=== STATIC CONTEXT (supporting) ===\n` +
+        `${contextData}`.trim()
+    }],
+  },
+  { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+];
+
 
     // --- Step 4: final model call via OpenRouter with fallback ---
     let text = "";
