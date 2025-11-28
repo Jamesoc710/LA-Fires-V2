@@ -453,3 +453,14 @@ DO NOT
     } catch (e) {
       console.warn("[CHAT] post-filter failed:", e);
     }
+
+    // After cleaning and filtering, return the final text.
+    return NextResponse.json({ response: text, intent }, { status: 200 });
+  } catch (error: any) {
+    console.error("Error in chat API:", error);
+    return NextResponse.json(
+      { response: friendlyFallbackMessage(), intent: "" },
+      { status: 200 }
+    );
+  }
+}
