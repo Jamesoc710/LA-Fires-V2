@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
-import { lookupZoning, lookupAssessor, lookupOverlays } from "@/lib/la/fetchers";
+import { 
+  lookupZoning, 
+  lookupAssessor, 
+  lookupOverlays, 
+  getParcelByAINorAPN,
+  makeCentroidFromGeom,
+  lookupJurisdictionPoint102100,
+  lookupCityZoning,
+  lookupCityOverlays
+} from "@/lib/la/fetchers";
+import { resolveCityProvider, getCityProvider, debugProvidersLog } from "@/lib/la/providers";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -174,91 +184,263 @@ export async function POST(request: NextRequest) {
         const apn = extractApn(lastUser);
         const address = extractAddress(lastUser);
 
-        if (apn) {
-          const [zRes, aRes, oRes] = await Promise.allSettled([
-            SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
-            SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
-            SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
-          ]);
+if (apn) {
+  // 1) Get parcel + centroid (for jurisdiction + city services)
+  const parcel = await getParcelByAINorAPN(apn);
+  if (!parcel?.geometry) {
+    throw new Error(`Parcel with APN/AIN ${apn} not found or missing geometry.`);
+  }
 
-          if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
-            toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
-          }
-          if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
-            toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
-          }
-          if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
-            toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
-          }
-        } else if (address) {
-          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
-        } else {
-          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
-        }
+  const centroid = makeCentroidFromGeom(parcel.geometry);
+  if (!centroid) {
+    throw new Error(`Could not compute centroid for APN/AIN ${apn}.`);
+  }
+
+  // 2) Jurisdiction lookup (point in 102100)
+  const j = await lookupJurisdictionPoint102100(centroid.x, centroid.y);
+  toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
+
+  // Log what providers we have vs what came back from DPW
+  debugProvidersLog(j.jurisdiction);
+
+  if (j?.source === "CITY") {
+    const cityName = j.jurisdiction || "";
+    const provider = getCityProvider(cityName);
+
+    // --- CITY ZONING ---
+    if (SHOW_ZONING) {
+      if (provider) {
+        const cityZ = await lookupCityZoning(apn, provider);
+        // cityZ already has a 'card' shape; stringify that for the model
+        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cityZ.card ?? cityZ, null, 2)}`;
+      } else {
+        // City parcel but not in CITY_PROVIDERS_JSON
+        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(
+          {
+            note: "Parcel is in a city not yet configured; county zoning does not apply.",
+            city: cityName,
+          },
+          null,
+          2
+        )}`;
       }
-    } catch (e) {
+    }
+
+    // --- CITY OVERLAYS (now live; falls back gracefully) ---
+
+if (SHOW_OVERLAYS) {
+  if (
+    provider &&
+    provider.method === "arcgis_query" &&
+    Array.isArray(provider.overlays) &&
+    provider.overlays.length > 0
+  ) {
+    // Ensure we have centroid in 102100
+    const centroid = makeCentroidFromGeom(parcel.geometry);
+
+    if (centroid) {
+      const { overlays, note } = await lookupCityOverlays(
+
+        centroid,
+        provider.overlays
+      );
+
+      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+        {
+          city: cityName,         // "City of Los Angeles" / "Pasadena"
+          overlays,               // OverlayCard[]
+          note: note ?? undefined // optional note from lookupCityOverlays
+        },
+        null,
+        2
+      )}`;
+    } else {
+      // Fallback if centroid could not be computed
+      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+        {
+          city: cityName,
+          overlays: [] as any[],  // no overlays because we couldn't query
+          note:
+            "Failed to compute centroid for city overlays; use the city's GIS viewer.",
+          viewer: "viewer" in provider ? provider.viewer : null
+        },
+        null,
+        2
+      )}`;
+    }
+  } else {
+    // No overlay bundles configured for this city
+    toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+      {
+        city: cityName,
+        overlays: [] as any[],
+        note:
+          "City parcel; use the city's GIS for overlays/specific plans.",
+        viewer: provider && "viewer" in provider ? provider.viewer : null
+      },
+      null,
+      2
+    )}`;
+  }
+}
+
+
+    // --- ASSESSOR (still County-wide) ---
+    if (SHOW_ASSESSOR) {
+      const a = await lookupAssessor(apn).catch(() => null);
+      if (a) {
+        toolContext += `\n[TOOL:assessor]\n${JSON.stringify(a, null, 2)}`;
+      }
+    }
+
+    // NOTE: For CITY parcels we intentionally skip County zoning/overlay layers.
+  } else {
+    // --- COUNTY / UNINCORPORATED FLOW ---
+    const [zRes, aRes, oRes] = await Promise.allSettled([
+      SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
+      SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
+      SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+    ]);
+
+    if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
+      toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
+    }
+    if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
+      toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+    }
+    if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
+      toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
+    }
+  }
+} else if (address) {
+  toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+} else {
+  toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+}
+
+}
+     } catch (e) {
       toolContext += `\n[TOOL_ERROR] ${String(e)}`;
     }
 
     console.log("[CHAT] toolContext length:", toolContext.length);
 
+
+    
+
     // --- Step 3: build prompts with tools first ---
-    const systemPreamble = `
+
+const systemPreamble = `
 You are LA-Fires Assistant.
-Rules:
-- Use TOOL OUTPUTS as the single source of truth when present.
-- Render ONLY the sections whose flags are true.
-- If a flagged section has no tool data, output exactly: <Section Heading>\nSection: Unknown
-- Never include any section that is not flagged.
-- Output plain text only (no Markdown).
-- Valid headings: Zoning, Overlays, Assessor.
-- Inside a section, print concise KEY: VALUE lines.
-- Order: Zoning, Overlays, Assessor.
+
+You answer for a single parcel at a time and you only use the TOOL OUTPUTS provided.
+
+RULES
+- Treat TOOL OUTPUTS as the only source of facts. Do not invent data.
+- Only include a section if its SHOW_* flag is true.
+- If a section flag is true but there is no useful TOOL OUTPUT, include the heading
+  and then a single line:
+  Section: Unknown
+- Never include a section whose SHOW_* flag is false.
+- Use plain text only (no Markdown, no bullets, no tables).
+- Inside each section, use concise "KEY: VALUE" lines.
+- It is OK to include several important fields; be informative, not ultra-minimal.
+- Prefer human-friendly fields such as: jurisdiction, zone, category, community plan,
+  plan designation, program, name, description, SEA_NAME, HAZ_CLASS, CSD_NAME, etc.
+- Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
+  internal IDs, or URLs.
+- Do not mention tools, JSON, or APIs in the final answer.
+
+FORMAT
+- Structure your answer into up to three sections, in this order:
+  Zoning
+  Overlays
+  Assessor
+- Put each section heading alone on its own line, exactly as written above.
+- Under each heading, only write KEY: VALUE lines.
 `.trim();
 
-    const customSystemPrompt = {
-      role: "user",
-      parts: [{
-        text: `Do NOT include any section whose SHOW_* flag is false. If all flags are false, ask the user to be more specific.`
-      }],
-    };
+    
+const combinedPrompt = [
+  { role: "system", parts: [{ text: systemPreamble }] },
+  {
+    role: "user",
+    parts: [{
+      text:
+        `CONTROL FLAGS\n` +
+        `SHOW_ZONING: ${SHOW_ZONING}\n` +
+        `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
+        `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
+    }],
+  },
+  { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+  {
+    role: "user",
+    parts: [{
+      text:
+        `=== TOOL OUTPUTS (authoritative) ===\n` +
+        `${toolContext || "(none)"}\n\n` +
+        `=== STATIC CONTEXT (supporting) ===\n` +
+        `${contextData}`.trim()
+    }],
+  },
+  { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+];
 
-    const combinedPrompt = [
-      { role: "user", parts: [{ text: systemPreamble }] },
-      customSystemPrompt,
-      { role: "user", parts: [{ text: `CONTROL FLAGS\nSHOW_ZONING: ${SHOW_ZONING}\nSHOW_OVERLAYS: ${SHOW_OVERLAYS}\nSHOW_ASSESSOR: ${SHOW_ASSESSOR}` }] },
-      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
-      { role: "user", parts: [{ text: `=== TOOL OUTPUTS (authoritative) ===\n${toolContext || "(none)"}\n\n=== STATIC CONTEXT (supporting) ===\n${contextData}`.trim() }] },
-      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-    ];
 
     // --- Step 4: final model call via OpenRouter with fallback ---
     let text = "";
     try {
-      text = await orWithRetryAndFallback(combinedPrompt, request, 0.1);
+      // **FIX**: Lower temperature for more consistent output
+      text = await orWithRetryAndFallback(combinedPrompt, request, 0.05);
     } catch {
       text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
     }
 
     // Defensive post-filter
+      // Defensive post-filter
     try {
       if (text) {
         const removeSection = (input: string, heading: string) => {
-          const re = new RegExp(`(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`, "gi");
+          const re = new RegExp(
+            `(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`,
+            "gi"
+          );
           return input.replace(re, "");
         };
-        if (!SHOW_ZONING) text = removeSection(text, "Zoning");
+
+        if (!SHOW_ZONING)   text = removeSection(text, "Zoning");
         if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
         if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
-        text = text.trim();
+
+        
+        const cleanedLines = text
+          .split(/\r?\n/)
+          .filter(line => {
+            // ignore empty lines
+            if (!line.trim()) return true;
+
+            // remove lines whose key starts with SHAPE / shape (e.g. SHAPE_AREA, shape_len)
+            if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) {
+              return false;
+            }
+
+            return true;
+          });
+
+        text = cleanedLines.join("\n").trim();
       }
     } catch (e) {
       console.warn("[CHAT] post-filter failed:", e);
     }
 
+    // After cleaning and filtering, return the final text.
     return NextResponse.json({ response: text, intent }, { status: 200 });
   } catch (error: any) {
     console.error("Error in chat API:", error);
-    return NextResponse.json({ response: friendlyFallbackMessage(), intent: "" }, { status: 200 });
+    return NextResponse.json(
+      { response: friendlyFallbackMessage(), intent: "" },
+      { status: 200 }
+    );
   }
 }

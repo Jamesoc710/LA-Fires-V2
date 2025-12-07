@@ -1,5 +1,8 @@
 // lib/la/fetchers.ts
 import { endpoints } from "./endpoints";
+import type { CityProvider, JurisdictionResult } from "./providers";
+import { normalizeCityName } from "./providers";
+import type { OverlayCard, OverlayProgram } from "./types";
 
 /* -------------------------- helpers: http + utils -------------------------- */
 
@@ -66,6 +69,29 @@ function digitsOnly(id: string) {
   return id.replace(/\D/g, "");
 }
 
+function areaOfGeom(geom: any): number | null {
+  if (!geom) return null;
+  try {
+    // polygon rings: [[x,y], ...]
+    const rings = geom.rings?.[0];
+    if (!Array.isArray(rings) || rings.length < 3) return null;
+    // rough bbox area
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const [x, y] of rings) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return (maxX - minX) * (maxY - minY);
+  } catch {
+    return null;
+  }
+}
+
 function pickLargestFeatureByArea(features: any[] | undefined) {
   if (!features?.length) return undefined;
   // area in WebMercator (outSR=102100) -> approximate by ring bbox area
@@ -90,30 +116,6 @@ function normalizeApnVariants(id: string) {
   return { digits, dashed };
 }
 
-
-function areaOfGeom(geom: any): number | null {
-  if (!geom) return null;
-  try {
-    // polygon rings: [[x,y], ...]
-    const rings = geom.rings?.[0];
-    if (!Array.isArray(rings) || rings.length < 3) return null;
-    // rough bbox area
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    for (const [x, y] of rings) {
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    }
-    return (maxX - minX) * (maxY - minY);
-  } catch {
-    return null;
-  }
-}
-
 function makeEnvelopeFromGeom(geom: any) {
   const rings = geom?.rings?.[0] ?? [];
   if (!rings.length) return null;
@@ -135,15 +137,36 @@ function makeEnvelopeFromGeom(geom: any) {
     spatialReference: { wkid: 102100 },
   };
 }
+export type ArcgisPoint102100 = {
+  x: number;
+  y: number;
+  spatialReference: { wkid: 102100 };
+};
 
-function makeCentroidFromGeom(geom: any) {
+export function makeCentroidFromGeom(geom: any): ArcgisPoint102100 | null {
   const env = makeEnvelopeFromGeom(geom);
   if (!env) return null;
   return {
     x: (env.xmin + env.xmax) / 2,
     y: (env.ymin + env.ymax) / 2,
-    spatialReference: { wkid: 102100 },
+    spatialReference: { wkid: 102100 as 102100 }, // 👈 literal type
   };
+}
+
+function firstFieldValue(a: any, csv?: string) {
+  if (!a || !csv) return null;
+  for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
+    if (k in a && a[k] != null && String(a[k]).trim() !== "") return a[k];
+  }
+  return null;
+}
+
+// WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
+function wmToWgs84(point102100: { x: number; y: number }) {
+  const R = 6378137;
+  const lon = (point102100.x / R) * 180 / Math.PI;
+  const lat = (2 * Math.atan(Math.exp(point102100.y / R)) - Math.PI / 2) * 180 / Math.PI;
+  return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
 }
 
 /* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
@@ -154,15 +177,343 @@ export async function getParcelByAINorAPN(id: string) {
   // NOTE: no SQL functions; many LA layers disallow them
   const where = [`AIN='${digits}'`, `APN='${digits}'`, `APN='${dashed}'`].join(" OR ");
 
-  const r = await esriQuery(endpoints.znetAddressSearch, {
-    returnGeometry: "true",
-    outSR: "102100",
-    where,
-    outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
+  if (!endpoints.znetAddressSearch) {
+    throw new Error("Missing ZNET_ADDRESS_SEARCH endpoint");
+  }
+  let r: any;
+  try {
+    r = await esriQuery(endpoints.znetAddressSearch, {
+      returnGeometry: "true",
+      outSR: "102100",
+      where,
+      outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
+    });
+  } catch (e) {
+    console.log("[PARCEL] query failed:", String(e));
+    return null;
+  }
+
+  const feat = pickLargestFeatureByArea(Array.isArray(r?.features) ? r.features : []);
+  return feat ?? null;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              JURISDICTION LOOKUP                           */
+/* -------------------------------------------------------------------------- */
+
+/** Query DPW City Boundaries by a point in Web Mercator (wkid 102100). */
+export async function lookupJurisdictionPoint102100(x: number, y: number): Promise<JurisdictionResult> {
+  if (!endpoints.jurisdictionQuery) {
+    return { jurisdiction: "Unknown", source: "ERROR", note: "JURISDICTION_QUERY not configured." };
+  }
+
+  try {
+    const geometry = JSON.stringify({
+      x, y,
+      spatialReference: { wkid: 102100 }
+    });
+
+    // Ask for the fields that actually exist on the layer
+    const r = await esriQuery(endpoints.jurisdictionQuery, {
+      returnGeometry: "false",
+      inSR: "102100",
+      spatialRel: "esriSpatialRelIntersects",
+      geometryType: "esriGeometryPoint",
+      geometry,
+      outFields: "CITY_NAME,CITY_TYPE,OBJECTID",
+    });
+
+    const attrs = r?.features?.[0]?.attributes;
+    if (!attrs) {
+      return {
+        jurisdiction: "Unincorporated",
+        source: "COUNTY",
+        note: "No city boundary match found.",
+      };
+    }
+
+    // Normalize name and unincorporated flag
+    const name = (attrs.CITY_NAME as string | null) ?? null;
+    const type = (attrs.CITY_TYPE as string | null) ?? null;
+    const isCity = (type?.toLowerCase() === "city");
+
+    return {
+      jurisdiction: name ?? "Unincorporated",
+      source: isCity ? "CITY" : "COUNTY",
+      raw: attrs,
+    };
+  } catch (err: any) {
+    console.error("[lookupJurisdictionPoint102100] Error:", err);
+    return { jurisdiction: "Unknown", source: "ERROR", note: String(err?.message || err) };
+  }
+}
+
+export async function lookupCityZoning(id: string, provider: CityProvider) {
+  if (provider.method !== "arcgis_query") {
+    return { card: { type: "zoning", title: "Zoning (City)", body: "Viewer only.", links: { viewer: provider.viewer } } };
+  }
+
+  const parcel = await getParcelByAINorAPN(id);
+  if (!parcel?.geometry) return { card: { type: "zoning", title: "Zoning (City)", body: "Parcel geometry not found." } };
+
+  const centroid = makeCentroidFromGeom(parcel.geometry);
+  if (!centroid) return { card: { type: "zoning", title: "Zoning (City)", body: "Failed to compute centroid." } };
+
+  const r = await esriQuery(provider.zoning.url, {
+    returnGeometry: "false",
+    inSR: "102100",
+    spatialRel: "esriSpatialRelIntersects",
+    geometryType: "esriGeometryPoint",
+    geometry: JSON.stringify(centroid),
+    outFields: provider.zoning.outFields || "*",
   });
 
-  const feat = pickLargestFeatureByArea(r.features);
-  return feat ?? null;
+  const a = r?.features?.[0]?.attributes ?? null;
+  if (!a) {
+    return { card: { type: "zoning", title: "Zoning (City)", body: "No zoning feature found.", links: provider.viewer ? { viewer: provider.viewer } : undefined } };
+  }
+
+  const name = firstFieldValue(a, provider.zoning.nameFields ?? "ZONE,ZONING,ZONE_CODE");
+  const desc = firstFieldValue(a, provider.zoning.descFields ?? "Z_DESC,ZONE_DESC,DESCRIPT");
+  const label = name ? (desc ? `${name} — ${desc}` : name) : Object.keys(a).slice(0, 2).map(k => `${k}:${a[k]}`).join(", ");
+
+  return {
+    card: {
+      type: "zoning",
+      title: "Zoning (City)",
+      body: label || "Zoning attributes found.",
+      raw: a,
+      links: provider.viewer ? { viewer: provider.viewer } : undefined,
+    }
+  };
+}
+
+// ----------------------------- CITY OVERLAYS -----------------------------
+// type ArcgisPoint102100 = { x: number; y: number; spatialReference: { wkid: 102100 } };
+
+type OverlayBundle = {
+  label: string;
+  url: string;            // FeatureServer root OR .../{layerId}/query
+  sublayers?: number[];   // when present, loop these ids -> .../{id}/query
+  outFields?: string;
+  nameFields?: string;    // CSV: "NAME,TITLE,..."
+  descFields?: string;    // CSV: "DESCRIPTIO,TYPE,..."
+};
+
+type OverlayHit = {
+  label: string;
+  layer?: string;
+  attributes: Record<string, any>;
+  summary?: string;
+};
+
+const OVERLAY_BASE_PARAMS = {
+  returnGeometry: "false",
+  inSR: "102100",
+  spatialRel: "esriSpatialRelIntersects",
+};
+
+function pickField(a: Record<string, any>, csv?: string) {
+  if (!a || !csv) return undefined;
+  for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
+    if (k in a && a[k] != null && String(a[k]).trim() !== "") return String(a[k]);
+  }
+  return undefined;
+}
+
+function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string, descCsv?: string) {
+  if (!a) return undefined;
+  const name = pickField(a, nameCsv) ??
+               pickField(a, "NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME");
+  const desc = pickField(a, descCsv) ??
+               pickField(a, "DESCRIPTIO,NOTES,TYPE,CATEGORY");
+  if (name && desc) return `${name} — ${desc}`;
+  if (name) return name;
+  return undefined;
+}
+
+/** Query city overlays at a parcel centroid (102100). */
+export async function lookupCityOverlays(
+  centroid102100: ArcgisPoint102100,
+  bundles: OverlayBundle[]
+): Promise<{ overlays: OverlayCard[]; note?: string }> {
+  const results: OverlayHit[] = [];
+
+  for (const b of bundles || []) {
+    try {
+      // Case A: explicit .../0/query style (HPOZ or single-layer URLs)
+      if (!b.sublayers?.length) {
+        const r = await esriQuery(b.url, {
+          ...OVERLAY_BASE_PARAMS,
+          outFields: b.outFields || "*",
+          geometryType: "esriGeometryPoint",
+          geometry: JSON.stringify(centroid102100),
+        });
+        const feat = r?.features?.[0]?.attributes;
+        if (feat) {
+          results.push({
+            label: b.label,
+            attributes: feat,
+            summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
+          });
+        }
+        continue;
+      }
+
+      // Case B: FeatureServer root + sublayer IDs (SUD bundle, Pasadena bundles, etc.)
+      for (const id of b.sublayers) {
+        const layerUrl = `${b.url.replace(/\/+$/,"")}/${id}/query`;
+        const r = await esriQuery(layerUrl, {
+          ...OVERLAY_BASE_PARAMS,
+          outFields: b.outFields || "*",
+          geometryType: "esriGeometryPoint",
+          geometry: JSON.stringify(centroid102100),
+        });
+        const feat = r?.features?.[0]?.attributes;
+        if (feat) {
+          results.push({
+            label: b.label,
+            layer: String(id),
+            attributes: feat,
+            summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
+          });
+        }
+      }
+    } catch (e) {
+      console.log("[OVERLAYS] bundle error:", b.label, String(e));
+    }
+  }
+
+  //  Dedupe overlays so "SUD: Downtown" only shows once
+  const dedupMap = new Map<string, OverlayHit>();
+
+  for (const o of results) {
+    // use label + summary as the key; you could also use label + layer + summary if you ever
+    // want separate entries per layer, but same “Downtown” should collapse:
+    const key = `${o.label}::${o.summary ?? ""}`;
+    if (!dedupMap.has(key)) {
+      dedupMap.set(key, o);
+    }
+  }
+
+  const dedupedHits = Array.from(dedupMap.values());
+
+  // First map to OverlayCard | null
+  const mapped = dedupedHits.map((hit): OverlayCard | null => {
+    const feat = hit.attributes ?? {};
+    const label = hit.label ?? "";
+    const summary = hit.summary ?? undefined;
+    const lowerLabel = label.toLowerCase();
+
+    // For Pasadena "Zoning Overlays" layer, skip entries that only contain base zoning
+    if (
+      label.includes("Zoning Overlays") &&
+      !(
+        feat.OVERLAY_DESC ||
+        feat.OVERLAY ||
+        feat.OVERLAY_NAME ||
+        feat.SPECIFICPLAN ||
+        feat.SPECIFIC_PLAN ||
+        feat.SPEC_PLAN
+      )
+    ) {
+      // No real overlay info, just base zone -> don't create a card
+      return null;
+    }
+
+    // Default values shared across programs
+    const base = {
+      source: "City" as const,   // generic city source
+      name: summary || label,
+      details: summary,
+      attributes: feat,
+    };
+
+    // ─────────────────────────────────────────────
+    // LA-specific niceties for non-SUD / non-HPOZ overlays
+    // ─────────────────────────────────────────────
+
+    // General Plan Land Use (LA City)
+    if (lowerLabel.includes("general plan land use")) {
+      const gpluDesc =
+        feat.GPLU_DESC ||
+        feat.LU_LABEL ||
+        summary ||
+        "General Plan Land Use";
+
+      const parts = [
+        gpluDesc,
+        feat.CPA ? `CPA: ${feat.CPA}` : null,
+      ].filter(Boolean);
+
+      return {
+        ...base,
+        program: "Other",
+        name: gpluDesc,
+        details: parts.join(" — ") || base.details,
+      };
+    }
+
+    // Very High Fire Hazard Severity Zones (LA City)
+    if (
+      lowerLabel.includes("very high fire hazard") ||
+      lowerLabel.includes("very_high_fire")
+    ) {
+      const name =
+        "Very High Fire Hazard Severity Zone";
+
+      const details =
+        feat.HAZ_CLASS ||
+        feat.GENERALIZE ||
+        "Parcel is inside the City's Very High Fire Hazard Severity Zone";
+
+      return {
+        ...base,
+        program: "Other",
+        name,
+        details,
+      };
+    }
+
+    // You could add a similar block for Wildfire Evacuation Zones if you like:
+    // if (lowerLabel.includes("wildfire evacuation")) { ... }
+
+    // ─────────────────────────────────────────────
+    // SUD / HPOZ classification
+    // ─────────────────────────────────────────────
+
+    if (label.includes("Supplemental Use Districts") || label.includes("SUD")) {
+      return {
+        ...base,
+        program: "SUD",
+        // For SUD we can prefer district / overlay name if present
+        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
+      };
+    }
+
+    if (label.includes("Historic Preservation") || label.includes("HPOZ")) {
+      return {
+        ...base,
+        program: "HPOZ",
+        name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
+        details: feat.DESCRIPTIO ?? base.details,
+      };
+    }
+
+    // Fallback for other city overlays — MUST be one of the OverlayProgram literals
+    return {
+      ...base,
+      program: "Other",
+    };
+  });
+
+
+  // Then filter out the nulls so TS knows this is OverlayCard[]
+  const overlays: OverlayCard[] = mapped.filter(
+    (card): card is OverlayCard => card !== null
+  );
+
+  return { overlays };
 }
 
 
@@ -292,11 +643,17 @@ export async function lookupZoning(id: string) {
 }
 
 /*------OVERLAY LOOKUP--------*/
-export async function lookupOverlays(id: string) {
+export async function lookupOverlays(
+  apn: string
+): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string; links?: { znet?: string } }> {
   // 1) get parcel geometry
-  const parcel = await getParcelByAINorAPN(id);
+  const parcel = await getParcelByAINorAPN(apn);
   if (!parcel?.geometry) {
-    return { overlays: [], note: "Parcel geometry not found for this APN/AIN." };
+    return {
+      input: { apn },
+      overlays: [],
+      note: "Parcel geometry not found for this APN/AIN.",
+    };
   }
 
   // use a tiny payload for reliability (point); fallback to envelope if needed
@@ -308,63 +665,85 @@ export async function lookupOverlays(id: string) {
     returnGeometry: "false",
     inSR: "102100",
     spatialRel: "esriSpatialRelIntersects",
-    outFields: "*",              // best shot; fields vary by layer
+    outFields: "*", // best shot; fields vary by layer
   };
 
-  const results: Array<{
-    url: string;
-    ok: boolean;
-    method: "point" | "envelope";
-    attributes?: Record<string, any> | null;
-    rawCount?: number;
-    error?: string;
-    label?: string;
-  }> = [];
+  const results: OverlayCard[] = [];
 
   for (const url of endpoints.overlayQueries) {
-    // try POINT first (fast & tiny)
-    try {
-      const r1 = await esriQuery(url, {
-        ...base,
-        geometry: JSON.stringify(centroid),
-        geometryType: "esriGeometryPoint",
-      });
-      const attrs = r1.features?.[0]?.attributes ?? null;
-      results.push({
-        url,
-        ok: Boolean(attrs),
-        method: "point",
-        attributes: attrs,
-        rawCount: Array.isArray(r1.features) ? r1.features.length : undefined,
-        label: summarizeOverlay(attrs),
-      });
-      continue;
-    } catch (e) {
-      // fall through to envelope
-    }
+    let attrs: Record<string, any> | null = null;
 
-    // fallback: ENVELOPE (still small)
     try {
-      const r2 = await esriQuery(url, {
-        ...base,
-        geometry: JSON.stringify(envelope),
-        geometryType: "esriGeometryEnvelope",
-      });
-      const attrs = r2.features?.[0]?.attributes ?? null;
+      // try POINT first (fast & tiny)
+      if (centroid) {
+        const r1 = await esriQuery(url, {
+          ...base,
+          geometry: JSON.stringify(centroid),
+          geometryType: "esriGeometryPoint",
+        });
+        attrs = r1.features?.[0]?.attributes ?? null;
+      }
+
+      // fallback: ENVELOPE (if point fails or returns nothing)
+      if (!attrs && envelope) {
+        const r2 = await esriQuery(url, {
+          ...base,
+          geometry: JSON.stringify(envelope),
+          geometryType: "esriGeometryEnvelope",
+        });
+        attrs = r2.features?.[0]?.attributes ?? null;
+      }
+
+      if (!attrs) continue;
+
+      // ─────────────────────────────────────────────
+      // Normalize into OverlayCard
+      // ─────────────────────────────────────────────
+
+      // 1) Program (must be OverlayProgram)
+      let program: OverlayProgram = "Other"; // default
+
+      if (attrs.CSD_NAME) {
+        // County Community Standards District
+        program = "CSD";
+      }
+      // If you later add other County overlay types you can extend this:
+      // else if (attrs.SEA_NAME) { program = "Other"; /* keep as Other for now */ }
+
+      // 2) Name
+      let name =
+        attrs.CSD_NAME ??
+        attrs.SEA_NAME ??
+        attrs.DISTRICT ??
+        summarizeOverlay(attrs) ??
+        "County overlay";
+
+      // 3) Details (optional)
+      let details: string | undefined = undefined;
+
+      if (attrs.TITLE22) {
+        details = attrs.TITLE22;
+      } else if (attrs.Type) {
+        details = attrs.Type;
+      }
+
       results.push({
-        url,
-        ok: Boolean(attrs),
-        method: "envelope",
+        source: "County",
+        program,
+        name,
+        details,
         attributes: attrs,
-        rawCount: Array.isArray(r2.features) ? r2.features.length : undefined,
-        label: summarizeOverlay(attrs),
       });
     } catch (e) {
-      results.push({ url, ok: false, method: "envelope", error: String(e) });
+      console.log(`[OVERLAYS] query failed for ${url}`, String(e));
     }
   }
 
-  return { overlays: results };
+  return {
+    input: { apn },
+    overlays: results,
+    links: { znet: endpoints.znetViewer },
+  };
 }
 
 /** Attempt to make a short human label from whatever fields the layer has. */
@@ -389,9 +768,6 @@ function summarizeOverlay(a?: Record<string, any> | null): string | undefined {
     return pick;
   }
 }
-
-
-
 
 /* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
 

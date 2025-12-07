@@ -38,13 +38,19 @@ type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
 
 function sectionKindFrom(line: string): SectionKind {
   const s = line.trim().toLowerCase().replace(/\*\*/g, '');
+
   // ignore “section: unknown”
   if (/^section\s*:\s*unknown\b/.test(s)) return null;
 
-  // accept "section: zoning", "zoning:", "zoning"
-  if (/^(section\s*:\s*)?zoning\s*:?\s*$/.test(s)) return 'zoning';
-  if (/^(section\s*:\s*)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
+  // Accept "Zoning", "City Zoning", "Section: Zoning", etc.
+  if (/^(section\s*:\s*)?(city\s+)?zoning\s*:?\s*$/.test(s)) return 'zoning';
+
+  // Accept "Overlays", "City Overlays", "Overlay", etc.
+  if (/^(section\s*:\s*)?(city\s+)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
+
+  // Assessor is usually just "Assessor"
   if (/^(section\s*:\s*)?assessor\s*:?\s*$/.test(s)) return 'assessor';
+
   return null;
 }
 
@@ -78,14 +84,33 @@ function takeSection(lines: string[], startIndex: number): { end: number; data: 
   let i = startIndex + 1;
   while (i < lines.length && !/^\s*(Zoning|Overlays|Assessor)\s*$/i.test(lines[i])) {
     const kv = extractKV(lines[i]);
-    if (kv) {
-      const [k, v] = kv;
-      data[normalizeKey(k)] = v;
-    }
+if (kv) {
+  const [k, v] = kv;
+  addKV(data, k, v);
+}
+
     i++;
   }
   return { end: i, data };
 }
+
+function addKV(data: SectionData, k: string, v: string) {
+  const norm = normalizeKey(k);
+  let key = norm;
+
+  // if this key already exists, add _2, _3, ...
+  if (data[key] !== undefined) {
+    let i = 2;
+    while (data[`${norm}_${i}`] !== undefined) {
+      i++;
+    }
+    key = `${norm}_${i}`;
+  }
+
+  data[key] = v;
+}
+
+
 
 function parseAssistantText(text: string): ParsedReply | null {
   if (!text) return null;
@@ -107,11 +132,12 @@ function parseAssistantText(text: string): ParsedReply | null {
     const data: SectionData = {};
     let j = i + 1;
     while (j < lines.length && sectionKindFrom(lines[j]) === null) {
-      const kv = extractKV(lines[j]);
-      if (kv) {
-        const [k, v] = kv;
-        data[normalizeKey(k)] = v;
-      }
+    const kv = extractKV(lines[j]);
+    if (kv) {
+      const [k, v] = kv;
+      addKV(data, k, v);
+    }
+
       j++;
     }
 
@@ -334,7 +360,7 @@ return (
         </a>
       )}
       <a
-        href={znetViewerUrl()}
+        href={znetViewerUrl}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
@@ -343,7 +369,7 @@ return (
         ZNET ↗
       </a>
       <a
-        href={gisnetViewerUrl()}
+        href={gisnetViewerUrl}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
