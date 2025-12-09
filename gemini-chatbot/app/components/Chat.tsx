@@ -5,7 +5,7 @@ import { Message } from '../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// NEW: viewer links (safe to import client-side; they’re static urls)
+// NEW: viewer links (safe to import client-side; they're static urls)
 import {
   assessorParcelUrl,
   znetViewerUrl,
@@ -26,12 +26,24 @@ function downloadFile(filename: string, contents: string, mime = 'application/js
 /* ------------ tiny utils to parse our assistant text into sections ----------- */
 
 type SectionData = Record<string, string>;
+
+// NEW: Grouped overlay structure
+type OverlayCategory = {
+  name: string;
+  items: string[];
+};
+type GroupedOverlays = {
+  jurisdiction?: string;
+  categories: OverlayCategory[];
+};
+
 type ParsedReply = {
   raw: string;
   apn?: string;
   ain?: string;
   zoning?: SectionData;
-  overlays?: SectionData;
+  overlays?: SectionData;           // legacy flat format
+  groupedOverlays?: GroupedOverlays; // NEW: grouped format
   assessor?: SectionData;
 };
 type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
@@ -39,7 +51,7 @@ type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
 function sectionKindFrom(line: string): SectionKind {
   const s = line.trim().toLowerCase().replace(/\*\*/g, '');
 
-  // ignore “section: unknown”
+  // ignore "section: unknown"
   if (/^section\s*:\s*unknown\b/.test(s)) return null;
 
   // Accept "Zoning", "City Zoning", "Section: Zoning", etc.
@@ -79,21 +91,6 @@ function normalizeKey(k: string) {
     .toUpperCase();
 }
 
-function takeSection(lines: string[], startIndex: number): { end: number; data: SectionData } {
-  const data: SectionData = {};
-  let i = startIndex + 1;
-  while (i < lines.length && !/^\s*(Zoning|Overlays|Assessor)\s*$/i.test(lines[i])) {
-    const kv = extractKV(lines[i]);
-if (kv) {
-  const [k, v] = kv;
-  addKV(data, k, v);
-}
-
-    i++;
-  }
-  return { end: i, data };
-}
-
 function addKV(data: SectionData, k: string, v: string) {
   const norm = normalizeKey(k);
   let key = norm;
@@ -110,11 +107,106 @@ function addKV(data: SectionData, k: string, v: string) {
   data[key] = v;
 }
 
+// NEW: Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
+function isCategoryHeader(line: string): string | null {
+  const trimmed = line.trim();
+  // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "OTHER:" etc.
+  // Must be all caps (or title case) and end with colon, no value after
+  const match = trimmed.match(/^([A-Z][A-Z\s&]+):$/);
+  if (match) {
+    return match[1].trim();
+  }
+  // Also match title case like "Land Use & Planning:"
+  const titleMatch = trimmed.match(/^([A-Z][a-zA-Z\s&]+):$/);
+  if (titleMatch && !trimmed.includes('—')) {
+    return titleMatch[1].trim();
+  }
+  return null;
+}
+
+// NEW: Check if a line is a bullet item
+function isBulletItem(line: string): string | null {
+  const trimmed = line.trim();
+  // Match lines starting with bullet character or dash
+  const match = trimmed.match(/^[•\-\*]\s*(.+)$/);
+  if (match) {
+    return match[1].trim();
+  }
+  return null;
+}
+
+// NEW: Parse grouped overlays format
+function parseGroupedOverlays(lines: string[], startIndex: number): { end: number; data: GroupedOverlays } {
+  const data: GroupedOverlays = { categories: [] };
+  let i = startIndex + 1;
+  let currentCategory: OverlayCategory | null = null;
+
+  while (i < lines.length && sectionKindFrom(lines[i]) === null) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    
+    // Check for JURISDICTION line
+    const kvMatch = extractKV(line);
+    if (kvMatch && kvMatch[0].toUpperCase() === 'JURISDICTION') {
+      data.jurisdiction = kvMatch[1];
+      i++;
+      continue;
+    }
+
+    // Check for category header
+    const categoryName = isCategoryHeader(line);
+    if (categoryName) {
+      // Save previous category if exists
+      if (currentCategory && currentCategory.items.length > 0) {
+        data.categories.push(currentCategory);
+      }
+      currentCategory = { name: categoryName, items: [] };
+      i++;
+      continue;
+    }
+
+    // Check for bullet item
+    const bulletItem = isBulletItem(line);
+    if (bulletItem && currentCategory) {
+      currentCategory.items.push(bulletItem);
+      i++;
+      continue;
+    }
+
+    // If it's a regular KV line that's not jurisdiction, might be legacy format
+    // Skip empty lines
+    if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    i++;
+  }
+
+  // Don't forget the last category
+  if (currentCategory && currentCategory.items.length > 0) {
+    data.categories.push(currentCategory);
+  }
+
+  return { end: i, data };
+}
+
+// NEW: Check if overlays section uses grouped format
+function isGroupedOverlayFormat(lines: string[], startIndex: number): boolean {
+  // Look ahead to see if we find category headers or bullets
+  for (let i = startIndex + 1; i < Math.min(startIndex + 10, lines.length); i++) {
+    if (sectionKindFrom(lines[i]) !== null) break;
+    if (isCategoryHeader(lines[i])) return true;
+    if (isBulletItem(lines[i])) return true;
+  }
+  return false;
+}
 
 
 function parseAssistantText(text: string): ParsedReply | null {
   if (!text) return null;
-  const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+  const lines = text.split(/\r?\n/);
+  const nonEmptyLines = lines.filter(l => l.trim().length > 0);
 
   const parsed: ParsedReply = { raw: text };
 
@@ -129,15 +221,27 @@ function parseAssistantText(text: string): ParsedReply | null {
     const kind = sectionKindFrom(lines[i]);
     if (!kind) continue;
 
+    if (kind === 'overlays') {
+      // Check if this is grouped format
+      if (isGroupedOverlayFormat(lines, i)) {
+        const { end, data } = parseGroupedOverlays(lines, i);
+        if (data.categories.length > 0 || data.jurisdiction) {
+          parsed.groupedOverlays = data;
+        }
+        i = end - 1;
+        continue;
+      }
+    }
+
+    // Standard KV parsing for zoning, assessor, or legacy overlays
     const data: SectionData = {};
     let j = i + 1;
     while (j < lines.length && sectionKindFrom(lines[j]) === null) {
-    const kv = extractKV(lines[j]);
-    if (kv) {
-      const [k, v] = kv;
-      addKV(data, k, v);
-    }
-
+      const kv = extractKV(lines[j]);
+      if (kv) {
+        const [k, v] = kv;
+        addKV(data, k, v);
+      }
       j++;
     }
 
@@ -151,7 +255,8 @@ function parseAssistantText(text: string): ParsedReply | null {
   }
 
   // If nothing structured, keep raw
-  return parsed.zoning || parsed.overlays || parsed.assessor ? parsed : { ...parsed, raw: text };
+  const hasStructured = parsed.zoning || parsed.overlays || parsed.groupedOverlays || parsed.assessor;
+  return hasStructured ? parsed : { ...parsed, raw: text };
 }
 
 /* -------------------------------- UI bits -------------------------------- */
@@ -203,6 +308,61 @@ function SectionCard({
   );
 }
 
+// NEW: Grouped Overlays Card Component
+function GroupedOverlaysCard({
+  data,
+  onCopy,
+}: {
+  data: GroupedOverlays;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-base font-semibold">Overlays</h3>
+        <button
+          type="button"
+          onClick={onCopy}
+          className="text-xs px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+          aria-label="Copy Overlays"
+          title="Copy Overlays"
+        >
+          Copy
+        </button>
+      </div>
+      
+      {/* Jurisdiction line */}
+      {data.jurisdiction && (
+        <div className="flex mb-3">
+          <span className="w-40 shrink-0 text-sm font-semibold text-slate-800 dark:text-slate-200">
+            JURISDICTION:
+          </span>
+          <span className="text-sm">{data.jurisdiction}</span>
+        </div>
+      )}
+
+      {/* Categories */}
+      <div className="space-y-4">
+        {data.categories.map((category, idx) => (
+          <div key={idx}>
+            <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              {category.name}
+            </h4>
+            <ul className="space-y-1 ml-1">
+              {category.items.map((item, itemIdx) => (
+                <li key={itemIdx} className="text-sm flex items-start gap-2">
+                  <span className="text-slate-400 dark:text-slate-500 select-none">•</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- Chat component ---------------------------- */
 
 export default function Chat() {
@@ -248,7 +408,7 @@ function clearChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
-    'What’s the zoning for APN 5843-004-015?',
+    'What's the zoning for APN 5843-004-015?',
     'Show overlays only for AIN 5843004015',
     'Assessor details for APN 5843-003-012',
     'Explain H5 plan designation',
@@ -257,17 +417,10 @@ function clearChat() {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      // submit
-      (e.currentTarget.form as HTMLFormElement)?.requestSubmit();
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -286,184 +439,216 @@ function clearChat() {
         body: JSON.stringify({ messages: [...messages, userMessage] }),
       });
 
-      if (!response.ok) throw new Error(`Error: ${response.status}`);
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
 
-      setMessages(prev => [...prev, { role: 'assistant', content: data.response }]);
-    } catch (err: any) {
-      console.error('Error sending message:', err);
-      setError(err.message || 'Failed to send message');
+      const data = await response.json();
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: data.response || 'Sorry, I could not generate a response.',
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
   };
 
-
-  
-function AssistantBubble({ text, index }: { text: string; index: number }) {
-  const parsed = useMemo(() => parseAssistantText(text), [text]);
-  const hasStructure = parsed && (parsed.zoning || parsed.overlays || parsed.assessor);
-  const showRaw = showRawForIndex === index;
-
-  // Fallback: render plain markdown if we didn't parse any sections
-  if (!hasStructure) {
-    return (
-      <div className="max-w-[70%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-      </div>
-    );
-  }
-
-  // Build “copy all” text quickly (sections if present, else raw)
-  const buildCopyAll = () => {
-    const blocks: string[] = [];
-    if (parsed?.zoning) {
-      blocks.push('Zoning');
-      blocks.push(
-        ...Object.entries(parsed.zoning).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-      );
-      blocks.push('');
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e);
     }
-    if (parsed?.overlays) {
-      blocks.push('Overlays');
-      blocks.push(
-        ...Object.entries(parsed.overlays).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-      );
-      blocks.push('');
-    }
-    if (parsed?.assessor) {
-      blocks.push('Assessor');
-      blocks.push(
-        ...Object.entries(parsed.assessor).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-      );
-    }
-    return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
   };
 
-return (
-  <div className="w-full max-w-[80%] space-y-3">
-    {/* header row: chips + viewer links + actions */}
-    <div className="flex flex-wrap gap-2 items-center">
-      {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
-      {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
+  // Helper to build copy text for grouped overlays
+  function buildGroupedOverlaysCopyText(data: GroupedOverlays): string {
+    const lines: string[] = ['Overlays'];
+    if (data.jurisdiction) {
+      lines.push(`JURISDICTION: ${data.jurisdiction}`);
+    }
+    for (const cat of data.categories) {
+      lines.push('');
+      lines.push(`${cat.name}:`);
+      for (const item of cat.items) {
+        lines.push(`  • ${item}`);
+      }
+    }
+    return lines.join('\n');
+  }
 
-      {/* viewer links */}
-      {parsed?.ain && (
+  function AssistantBubble({ text, index }: { text: string; index: number }) {
+    const parsed = useMemo(() => parseAssistantText(text), [text]);
+    const showRaw = showRawForIndex === index;
+
+    // Build "copy all" text quickly (sections if present, else raw)
+    const buildCopyAll = () => {
+      const blocks: string[] = [];
+      if (parsed?.zoning) {
+        blocks.push('Zoning');
+        blocks.push(
+          ...Object.entries(parsed.zoning).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+        );
+        blocks.push('');
+      }
+      if (parsed?.groupedOverlays) {
+        blocks.push(buildGroupedOverlaysCopyText(parsed.groupedOverlays));
+        blocks.push('');
+      } else if (parsed?.overlays) {
+        blocks.push('Overlays');
+        blocks.push(
+          ...Object.entries(parsed.overlays).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+        );
+        blocks.push('');
+      }
+      if (parsed?.assessor) {
+        blocks.push('Assessor');
+        blocks.push(
+          ...Object.entries(parsed.assessor).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+        );
+      }
+      return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
+    };
+
+  return (
+    <div className="w-full max-w-[80%] space-y-3">
+      {/* header row: chips + viewer links + actions */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
+        {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
+
+        {/* viewer links */}
+        {parsed?.ain && (
+          <a
+            href={assessorParcelUrl(parsed.ain)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            title="Open Assessor Portal"
+          >
+            Assessor ↗
+          </a>
+        )}
         <a
-          href={assessorParcelUrl(parsed.ain)}
+          href={znetViewerUrl}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-          title="Open Assessor Portal"
+          title="Open ZNET Viewer"
         >
-          Assessor ↗
+          ZNET ↗
         </a>
-      )}
-      <a
-        href={znetViewerUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-        title="Open ZNET Viewer"
-      >
-        ZNET ↗
-      </a>
-      <a
-        href={gisnetViewerUrl}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-        title="Open GISNET"
-      >
-        GISNET ↗
-      </a>
-
-      {/* actions for this reply */}
-      <div className="ml-auto flex gap-2">
-        <button
-          type="button"
-          onClick={() => navigator.clipboard.writeText(buildCopyAll()).catch(() => {})}
-          className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-          title="Copy this reply"
+        <a
+          href={gisnetViewerUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+          title="Open GISNET"
         >
-          Copy all
-        </button>
+          GISNET ↗
+        </a>
 
-        <button
-          type="button"
-          onClick={() => {
-            const toExport = {
-              apn: parsed?.apn ?? null,
-              ain: parsed?.ain ?? null,
-              zoning: parsed?.zoning ?? null,
-              overlays: parsed?.overlays ?? null,
-              assessor: parsed?.assessor ?? null,
-              raw: parsed?.raw ?? text,
-            };
-            downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
+        {/* actions for this reply */}
+        <div className="ml-auto flex gap-2">
+          <button
+            type="button"
+            onClick={() => navigator.clipboard.writeText(buildCopyAll()).catch(() => {})}
+            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            title="Copy this reply"
+          >
+            Copy all
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              const toExport = {
+                apn: parsed?.apn ?? null,
+                ain: parsed?.ain ?? null,
+                zoning: parsed?.zoning ?? null,
+                overlays: parsed?.overlays ?? null,
+                groupedOverlays: parsed?.groupedOverlays ?? null,
+                assessor: parsed?.assessor ?? null,
+                raw: parsed?.raw ?? text,
+              };
+              downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
+            }}
+            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            title="Download JSON"
+          >
+            Download JSON
+          </button>
+        </div>
+      </div>
+
+      {/* structured cards */}
+      {parsed?.zoning && (
+        <SectionCard
+          title="Zoning"
+          data={parsed.zoning}
+          onCopy={() => {
+            const block = Object.entries(parsed.zoning!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Zoning\n${block}`).catch(() => {});
           }}
-          className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-          title="Download JSON"
-        >
-          Download JSON
-        </button>
-      </div>
+        />
+      )}
+      
+      {/* NEW: Render grouped overlays if present, otherwise legacy flat format */}
+      {parsed?.groupedOverlays && (
+        <GroupedOverlaysCard
+          data={parsed.groupedOverlays}
+          onCopy={() => {
+            const copyText = buildGroupedOverlaysCopyText(parsed.groupedOverlays!);
+            navigator.clipboard.writeText(copyText).catch(() => {});
+          }}
+        />
+      )}
+      {!parsed?.groupedOverlays && parsed?.overlays && (
+        <SectionCard
+          title="Overlays"
+          data={parsed.overlays}
+          onCopy={() => {
+            const block = Object.entries(parsed.overlays!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Overlays\n${block}`).catch(() => {});
+          }}
+        />
+      )}
+      
+      {parsed?.assessor && (
+        <SectionCard
+          title="Assessor"
+          data={parsed.assessor}
+          onCopy={() => {
+            const block = Object.entries(parsed.assessor!)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join('\n');
+            navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
+          }}
+        />
+      )}
+
+      {/* raw toggle */}
+      <button
+        type="button"
+        onClick={() => setShowRawForIndex(showRaw ? null : index)}
+        className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
+      >
+        {showRaw ? 'Hide raw text' : 'Show raw text'}
+      </button>
+
+      {showRaw && (
+        <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+          <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
+        </div>
+      )}
     </div>
-
-    {/* structured cards */}
-    {parsed?.zoning && (
-      <SectionCard
-        title="Zoning"
-        data={parsed.zoning}
-        onCopy={() => {
-          const block = Object.entries(parsed.zoning!)
-            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-            .join('\n');
-          navigator.clipboard.writeText(`Zoning\n${block}`).catch(() => {});
-        }}
-      />
-    )}
-    {parsed?.overlays && (
-      <SectionCard
-        title="Overlays"
-        data={parsed.overlays}
-        onCopy={() => {
-          const block = Object.entries(parsed.overlays!)
-            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-            .join('\n');
-          navigator.clipboard.writeText(`Overlays\n${block}`).catch(() => {});
-        }}
-      />
-    )}
-    {parsed?.assessor && (
-      <SectionCard
-        title="Assessor"
-        data={parsed.assessor}
-        onCopy={() => {
-          const block = Object.entries(parsed.assessor!)
-            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-            .join('\n');
-          navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
-        }}
-      />
-    )}
-
-    {/* raw toggle */}
-    <button
-      type="button"
-      onClick={() => setShowRawForIndex(showRaw ? null : index)}
-      className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
-    >
-      {showRaw ? 'Hide raw text' : 'Show raw text'}
-    </button>
-
-    {showRaw && (
-      <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
-        <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
-      </div>
-    )}
-  </div>
-);
+  );
 }
 return (
   <div className="flex flex-col flex-1 min-h-0">
