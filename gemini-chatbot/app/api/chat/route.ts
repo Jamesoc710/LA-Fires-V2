@@ -57,6 +57,141 @@ function wantsAssessorSection(s: string) {
 }
 
 
+/* ---------------- Grouped Overlay Formatter ---------------- */
+
+interface OverlayCard {
+  source: "City" | "County";
+  program: "SUD" | "HPOZ" | "Other";
+  name: string;
+  details?: string;
+  attributes?: Record<string, any>;
+}
+
+type OverlayCategory = 
+  | "Hazards"
+  | "Historic Preservation"
+  | "Supplemental Use Districts"
+  | "Land Use & Planning"
+  | "Other";
+
+function categorizeOverlay(card: OverlayCard): OverlayCategory {
+  const name = (card.name || "").toLowerCase();
+  const details = (card.details || "").toLowerCase();
+  const combined = `${name} ${details}`;
+  
+  // Hazards - critical for rebuild
+  if (
+    combined.includes("fire") ||
+    combined.includes("hazard") ||
+    combined.includes("hillside") ||
+    combined.includes("flood") ||
+    combined.includes("evacuation") ||
+    combined.includes("landslide") ||
+    combined.includes("fault") ||
+    combined.includes("liquefaction") ||
+    combined.includes("sea_") ||
+    combined.includes("significant ecological")
+  ) {
+    return "Hazards";
+  }
+  
+  // Historic Preservation
+  if (
+    card.program === "HPOZ" ||
+    combined.includes("historic") ||
+    combined.includes("hpoz") ||
+    combined.includes("landmark") ||
+    combined.includes("national register") ||
+    combined.includes("monument")
+  ) {
+    return "Historic Preservation";
+  }
+  
+  // Supplemental Use Districts
+  if (
+    card.program === "SUD" ||
+    combined.includes("sud") ||
+    combined.includes("supplemental use")
+  ) {
+    return "Supplemental Use Districts";
+  }
+  
+  // Land Use & Planning
+  if (
+    combined.includes("general plan") ||
+    combined.includes("specific plan") ||
+    combined.includes("community plan") ||
+    combined.includes("transit") ||
+    combined.includes("gplu") ||
+    combined.includes("land use") ||
+    combined.includes("cpa") ||
+    combined.includes("redevelopment")
+  ) {
+    return "Land Use & Planning";
+  }
+  
+  return "Other";
+}
+
+function formatGroupedOverlays(
+  overlays: OverlayCard[],
+  jurisdiction: string
+): string {
+  if (!overlays || overlays.length === 0) {
+    return "";
+  }
+
+  // Group overlays by category
+  const groups: Record<OverlayCategory, OverlayCard[]> = {
+    "Hazards": [],
+    "Historic Preservation": [],
+    "Supplemental Use Districts": [],
+    "Land Use & Planning": [],
+    "Other": [],
+  };
+
+  for (const card of overlays) {
+    const category = categorizeOverlay(card);
+    groups[category].push(card);
+  }
+
+  // Build formatted output
+  const lines: string[] = [];
+  lines.push(`JURISDICTION: ${jurisdiction}`);
+
+  // Define category order (most important first)
+  const categoryOrder: OverlayCategory[] = [
+    "Hazards",
+    "Historic Preservation",
+    "Supplemental Use Districts",
+    "Land Use & Planning",
+    "Other",
+  ];
+
+  for (const category of categoryOrder) {
+    const items = groups[category];
+    if (items.length === 0) continue;
+
+    lines.push(""); // blank line before category
+    lines.push(`${category.toUpperCase()}:`);
+
+    for (const card of items) {
+      // Format: "• Name — Details" or just "• Name"
+      let itemLine = `  • ${card.name}`;
+      if (card.details && card.details !== card.name) {
+        // Avoid repeating name in details
+        const detailsClean = card.details.replace(new RegExp(card.name, "gi"), "").trim();
+        if (detailsClean && detailsClean !== "—" && detailsClean.length > 2) {
+          itemLine += ` — ${card.details}`;
+        }
+      }
+      lines.push(itemLine);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 /* ---------------- OpenRouter primary + fallback ---------------- */
 
 function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
@@ -293,11 +428,11 @@ export async function POST(request: NextRequest) {
 
                         if (overlays && overlays.length > 0) {
                           overlaysStatus = "success";
+                          // Use pre-formatted grouped overlays
+                          const formattedOverlays = formatGroupedOverlays(overlays, detectedJurisdiction);
                           toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                             status: "success",
-                            jurisdiction: detectedJurisdiction,
-                            city: cityName,
-                            overlays,
+                            formatted: formattedOverlays,
                             note: note ?? undefined
                           }, null, 2)}`;
                         } else {
@@ -453,12 +588,13 @@ export async function POST(request: NextRequest) {
                   if (oRes.status === "fulfilled" && oRes.value) {
                     if (oRes.value.overlays && oRes.value.overlays.length > 0) {
                       overlaysStatus = "success";
-                      const overlaysWithJurisdiction = {
+                      // Use pre-formatted grouped overlays
+                      const formattedOverlays = formatGroupedOverlays(oRes.value.overlays, detectedJurisdiction);
+                      toolContext += `\n[TOOL:overlays]\n${JSON.stringify({
                         status: "success",
-                        jurisdiction: detectedJurisdiction,
-                        ...oRes.value,
-                      };
-                      toolContext += `\n[TOOL:overlays]\n${JSON.stringify(overlaysWithJurisdiction, null, 2)}`;
+                        formatted: formattedOverlays,
+                        links: oRes.value.links
+                      }, null, 2)}`;
                     } else {
                       overlaysStatus = "no_data";
                       overlaysMessage = "No special overlays, CSDs, SEAs, or hazard zones found for this parcel.";
@@ -526,8 +662,8 @@ You answer for a single parcel at a time and you only use the TOOL OUTPUTS provi
 RULES
 - Treat TOOL OUTPUTS as the only source of facts. Do not invent data.
 - Only include a section if its SHOW_* flag is true.
-- Use plain text only (no Markdown, no bullets, no tables).
-- Inside each section, use concise "KEY: VALUE" lines.
+- Use plain text only (no Markdown, no bullets, no tables) EXCEPT for the Overlays section.
+- Inside Zoning and Assessor sections, use concise "KEY: VALUE" lines.
 - Prefer human-friendly fields such as: jurisdiction, zone, category, community plan,
   plan designation, program, name, description, SEA_NAME, HAZ_CLASS, CSD_NAME, etc.
 - Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
@@ -547,13 +683,20 @@ IMPORTANT - JURISDICTION
 - Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County").
 - This tells the user which city or county rules apply to their parcel.
 
+CRITICAL - OVERLAYS SECTION
+- When the overlay tool output contains a "formatted" field, output its contents EXACTLY as provided.
+- Do not reformat, reorganize, or summarize the formatted overlays.
+- The formatted text already includes JURISDICTION, category headings, and bullet points.
+- Just copy the "formatted" field content directly after the "Overlays" heading.
+
 FORMAT
 - Structure your answer into up to three sections, in this order:
   Zoning
   Overlays
   Assessor
 - Put each section heading alone on its own line, exactly as written above.
-- Under each heading, only write KEY: VALUE lines.
+- For Zoning and Assessor, use KEY: VALUE lines.
+- For Overlays, copy the pre-formatted text exactly.
 - For the Zoning section, always start with JURISDICTION: <value>
 - Never include a section whose SHOW_* flag is false.
 `.trim();
