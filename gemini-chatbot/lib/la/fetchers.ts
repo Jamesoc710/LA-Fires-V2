@@ -435,12 +435,15 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
   const desc = firstFieldValue(a, provider.zoning.descFields ?? "Z_DESC,ZONE_DESC,DESCRIPT");
   const label = name ? (desc ? `${name} — ${desc}` : name) : Object.keys(a).slice(0, 2).map(k => `${k}:${a[k]}`).join(", ");
 
+  // Sanitize raw attributes to remove OBJECTID, SHAPE*, etc.
+  const cleanRaw = sanitizeOverlayAttributes(a);
+
   return {
     card: {
       type: "zoning",
       title: "Zoning (City)",
       body: label || "Zoning attributes found.",
-      raw: a,
+      raw: cleanRaw,
       links: provider.viewer ? { viewer: provider.viewer } : undefined,
     }
   };
