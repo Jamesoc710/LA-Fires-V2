@@ -408,10 +408,10 @@ function clearChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
-    'What's the zoning for APN 5843-004-015?',
-    'Show overlays only for AIN 5843004015',
-    'Assessor details for APN 5843-003-012',
-    'Explain H5 plan designation',
+    "What's the zoning for APN 5843-004-015?",
+    "Show overlays only for AIN 5843004015",
+    "Assessor details for APN 5843-003-012",
+    "Explain H5 plan designation",
   ];
 
   const scrollToBottom = () => {
