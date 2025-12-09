@@ -59,9 +59,10 @@ function wantsAssessorSection(s: string) {
 
 /* ---------------- Grouped Overlay Formatter ---------------- */
 
+// Match the OverlayCard type from lib/la/types.ts
 interface OverlayCard {
   source: "City" | "County";
-  program: "SUD" | "HPOZ" | "Other";
+  program: "SUD" | "HPOZ" | "CSD" | "SEA" | "Other";
   name: string;
   details?: string;
   attributes?: Record<string, any>;
@@ -81,6 +82,7 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
   
   // Hazards - critical for rebuild
   if (
+    card.program === "SEA" ||
     combined.includes("fire") ||
     combined.includes("hazard") ||
     combined.includes("hillside") ||
@@ -114,6 +116,15 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     combined.includes("supplemental use")
   ) {
     return "Supplemental Use Districts";
+  }
+  
+  // Community Standards Districts (County)
+  if (
+    card.program === "CSD" ||
+    combined.includes("csd") ||
+    combined.includes("community standards")
+  ) {
+    return "Other"; // Group CSDs under Other for now, or create a new category
   }
   
   // Land Use & Planning
