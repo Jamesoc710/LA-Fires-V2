@@ -169,6 +169,164 @@ function wmToWgs84(point102100: { x: number; y: number }) {
   return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
 }
 
+/* ========================== ATTRIBUTE SANITIZATION ========================== */
+
+/**
+ * Fields that should NEVER appear in overlay output.
+ * These are technical/internal fields that confuse end users.
+ */
+const OVERLAY_FIELD_BLACKLIST = new Set([
+  // Internal IDs - never useful to end users
+  'OBJECTID', 'FID', 'OID', 'GLOBALID', 'GlobalID', 'GDB_GEOMATTR_DATA',
+  
+  // Geometry fields - technical noise
+  'SHAPE', 'Shape', 'SHAPE_AREA', 'SHAPE_LEN', 'SHAPE_LENGTH',
+  'Shape__Area', 'Shape__Length', 'Shape_Area', 'Shape_Length',
+  'shape_area', 'shape_len', 'shape_length', 'SHAPE.AREA', 'SHAPE.LEN',
+  'STArea__', 'STLength__',
+  
+  // Parcel identifiers - belong in Assessor section, not overlays
+  'APN', 'AIN', 'PARCEL', 'PARCEL_ID', 'LAND_PARCEL_NUMBER',
+  
+  // Address fields - belong in Assessor section
+  'ADDRESS', 'SITUS', 'CITY', 'STATE', 'ZIP', 'ZIPCODE',
+  'SitusAddress', 'SitusCity', 'SitusZIP',
+  
+  // Firefighting jurisdiction codes - not relevant to building/rebuild
+  'SRA',      // State Responsibility Area (who fights fires, not building codes)
+  'INCORP',   // Incorporated status (already shown as jurisdiction)
+  'VH_REC',   // Internal recommendation field
+  
+  // Creation/edit metadata - never useful
+  'CREATED_DATE', 'LAST_EDITED_DATE', 'CREATED_USER', 'LAST_EDITED_USER',
+  'CreationDate', 'EditDate', 'Creator', 'Editor',
+  'created_date', 'last_edited_date', 'created_user', 'last_edited_user',
+  
+  // Landmark tree (very niche, usually N)
+  'LANDMARK_TREE',
+]);
+
+/**
+ * Fields we actively WANT to show - these provide value to architects/homeowners.
+ * Used to prioritize display order when multiple fields exist.
+ */
+const OVERLAY_FIELD_PRIORITY = [
+  // Fire hazard - CRITICAL for rebuild
+  'HAZ_CLASS', 'HAZ_CODE', 'FIRE_REVIEW_DISTRICT', 'GENERALIZE',
+  
+  // Names and labels - primary identifiers
+  'NAME', 'TITLE', 'LABEL', 'DISTRICT', 
+  'HPOZ_NAME', 'CSD_NAME', 'SEA_NAME', 'CPIO_NAME',
+  'PLAN_NAME', 'SPEC_PLAN', 'SPECIFIC_PLAN', 'OVERLAY_NAME',
+  
+  // Descriptions
+  'DESCRIPTIO', 'DESCRIPTION', 'NOTES', 'TYPE', 'CATEGORY',
+  'OVERLAY_DESC', 'GEN_PLAN_DESC',
+  
+  // Plan/designation info - important for understanding development potential
+  'GPLU_DESC', 'LU_LABEL', 'LAND_USE', 'GP_DESIG', 'GEN_PLAN_USE_DESCRIPTION',
+  'PLAN_LEG', 'PLAN', 'CPA', 'COMM_NAME',
+  'LU_TYPE', 'ZONE', 'ZONE_CODE',
+  
+  // Hillside - important for rebuild constraints
+  'STATUS', 'SLOPE', 'HILLSIDE',
+  
+  // Historic - important for design review requirements
+  'HISTORIC_NAME', 'DESIGNATION', 'MONUMENT_TYP', 'DISTRICT_TYPE',
+  'NATIONAL_REGISTER_DISTRICT', 'NATIONAL_REGISTER_PROPERTY',
+  
+  // Administrative
+  'ADOPTED', 'EFFECTIVE', 'ORDINANCE',
+  
+  // SEA (Significant Ecological Area)
+  'SEA_TYPE', 'IMPLEMENTATION',
+  
+  // Flood
+  'FLOOD_ZONE', 'FLD_ZONE', 'ZONE_SUBTY',
+];
+
+/**
+ * Sanitize overlay attributes: remove technical junk, keep useful fields.
+ * Returns a clean object suitable for display to end users.
+ */
+function sanitizeOverlayAttributes(
+  raw: Record<string, any> | null | undefined
+): Record<string, any> {
+  if (!raw) return {};
+
+  const clean: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(raw)) {
+    // Skip blacklisted fields (case-sensitive match first)
+    if (OVERLAY_FIELD_BLACKLIST.has(key)) continue;
+    
+    // Also check uppercase version for case-insensitive blacklist
+    if (OVERLAY_FIELD_BLACKLIST.has(key.toUpperCase())) continue;
+
+    // Skip null/undefined/empty values
+    if (value == null || value === '' || value === 'null' || value === 'Null') continue;
+    
+    // Skip "N/A", "None", "Unknown" type values that add no info
+    if (typeof value === 'string') {
+      const v = value.trim().toLowerCase();
+      if (v === 'n/a' || v === 'none' || v === 'unknown' || v === 'n') continue;
+    }
+
+    // Skip fields that contain OBJECTID in their VALUE (e.g., "OBJECTID:1207, SRA:LRA")
+    if (typeof value === 'string' && /OBJECTID[:\s]*\d+/i.test(value)) continue;
+
+    // Skip fields ending in _ID, _OID, _FID (likely foreign keys)
+    if (/_(ID|OID|FID)$/i.test(key)) continue;
+    
+    // Skip fields starting with SHAPE (catch any we missed)
+    if (/^SHAPE/i.test(key)) continue;
+
+    // Include the field
+    clean[key] = value;
+  }
+
+  return clean;
+}
+
+/**
+ * Create a human-readable summary from overlay attributes.
+ * Tries known field names in priority order.
+ */
+function summarizeOverlayAttrs(
+  a?: Record<string, any> | null, 
+  nameCsv?: string, 
+  descCsv?: string
+): string | undefined {
+  if (!a) return undefined;
+  
+  // Helper to pick first non-empty value from comma-separated field list
+  const pickField = (csv?: string): string | undefined => {
+    if (!csv) return undefined;
+    for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
+      if (k in a && a[k] != null && String(a[k]).trim() !== '') {
+        const val = String(a[k]).trim();
+        // Skip values that are just IDs or technical codes
+        if (/^OBJECTID/i.test(val)) continue;
+        if (val.length < 2) continue; // Skip single chars like "Y", "N"
+        return val;
+      }
+    }
+    return undefined;
+  };
+
+  // Try provided field lists first
+  const name = pickField(nameCsv) ??
+               pickField("NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME,CSD_NAME,SEA_NAME");
+  const desc = pickField(descCsv) ??
+               pickField("DESCRIPTIO,DESCRIPTION,NOTES,TYPE,CATEGORY,GPLU_DESC,LU_LABEL");
+               
+  if (name && desc && name !== desc) return `${name} — ${desc}`;
+  if (name) return name;
+  if (desc) return desc;
+  
+  return undefined;
+}
+
 /* --------------------------- PARCEL (AIN/APN → geom) --------------------------- */
 
 export async function getParcelByAINorAPN(id: string) {
@@ -289,7 +447,6 @@ export async function lookupCityZoning(id: string, provider: CityProvider) {
 }
 
 // ----------------------------- CITY OVERLAYS -----------------------------
-// type ArcgisPoint102100 = { x: number; y: number; spatialReference: { wkid: 102100 } };
 
 type OverlayBundle = {
   label: string;
@@ -312,25 +469,6 @@ const OVERLAY_BASE_PARAMS = {
   inSR: "102100",
   spatialRel: "esriSpatialRelIntersects",
 };
-
-function pickField(a: Record<string, any>, csv?: string) {
-  if (!a || !csv) return undefined;
-  for (const k of csv.split(",").map(s => s.trim()).filter(Boolean)) {
-    if (k in a && a[k] != null && String(a[k]).trim() !== "") return String(a[k]);
-  }
-  return undefined;
-}
-
-function summarizeOverlayAttrs(a?: Record<string, any> | null, nameCsv?: string, descCsv?: string) {
-  if (!a) return undefined;
-  const name = pickField(a, nameCsv) ??
-               pickField(a, "NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME");
-  const desc = pickField(a, descCsv) ??
-               pickField(a, "DESCRIPTIO,NOTES,TYPE,CATEGORY");
-  if (name && desc) return `${name} — ${desc}`;
-  if (name) return name;
-  return undefined;
-}
 
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
@@ -384,13 +522,17 @@ export async function lookupCityOverlays(
     }
   }
 
-  //  Dedupe overlays so "SUD: Downtown" only shows once
+  // ─────────────────────────────────────────────
+  // Dedupe overlays so "SUD: Downtown" only shows once
+  // Use a smarter key that normalizes summaries
+  // ─────────────────────────────────────────────
   const dedupMap = new Map<string, OverlayHit>();
 
   for (const o of results) {
-    // use label + summary as the key; you could also use label + layer + summary if you ever
-    // want separate entries per layer, but same “Downtown” should collapse:
-    const key = `${o.label}::${o.summary ?? ""}`;
+    // Normalize summary for dedup (lowercase, trim, remove extra spaces)
+    const normSummary = (o.summary ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+    const key = `${o.label.toLowerCase()}::${normSummary}`;
+    
     if (!dedupMap.has(key)) {
       dedupMap.set(key, o);
     }
@@ -398,9 +540,10 @@ export async function lookupCityOverlays(
 
   const dedupedHits = Array.from(dedupMap.values());
 
-  // First map to OverlayCard | null
+  // Map to OverlayCard with sanitized attributes
   const mapped = dedupedHits.map((hit): OverlayCard | null => {
-    const feat = hit.attributes ?? {};
+    const rawFeat = hit.attributes ?? {};
+    const feat = sanitizeOverlayAttributes(rawFeat); // ← SANITIZED
     const label = hit.label ?? "";
     const summary = hit.summary ?? undefined;
     const lowerLabel = label.toLowerCase();
@@ -409,12 +552,12 @@ export async function lookupCityOverlays(
     if (
       label.includes("Zoning Overlays") &&
       !(
-        feat.OVERLAY_DESC ||
-        feat.OVERLAY ||
-        feat.OVERLAY_NAME ||
-        feat.SPECIFICPLAN ||
-        feat.SPECIFIC_PLAN ||
-        feat.SPEC_PLAN
+        rawFeat.OVERLAY_DESC ||
+        rawFeat.OVERLAY ||
+        rawFeat.OVERLAY_NAME ||
+        rawFeat.SPECIFICPLAN ||
+        rawFeat.SPECIFIC_PLAN ||
+        rawFeat.SPEC_PLAN
       )
     ) {
       // No real overlay info, just base zone -> don't create a card
@@ -423,10 +566,10 @@ export async function lookupCityOverlays(
 
     // Default values shared across programs
     const base = {
-      source: "City" as const,   // generic city source
+      source: "City" as const,
       name: summary || label,
       details: summary,
-      attributes: feat,
+      attributes: feat, // ← Now sanitized
     };
 
     // ─────────────────────────────────────────────
@@ -436,14 +579,14 @@ export async function lookupCityOverlays(
     // General Plan Land Use (LA City)
     if (lowerLabel.includes("general plan land use")) {
       const gpluDesc =
-        feat.GPLU_DESC ||
-        feat.LU_LABEL ||
+        rawFeat.GPLU_DESC ||
+        rawFeat.LU_LABEL ||
         summary ||
         "General Plan Land Use";
 
       const parts = [
         gpluDesc,
-        feat.CPA ? `CPA: ${feat.CPA}` : null,
+        rawFeat.CPA ? `CPA: ${rawFeat.CPA}` : null,
       ].filter(Boolean);
 
       return {
@@ -459,12 +602,11 @@ export async function lookupCityOverlays(
       lowerLabel.includes("very high fire hazard") ||
       lowerLabel.includes("very_high_fire")
     ) {
-      const name =
-        "Very High Fire Hazard Severity Zone";
+      const name = "Very High Fire Hazard Severity Zone";
 
       const details =
-        feat.HAZ_CLASS ||
-        feat.GENERALIZE ||
+        rawFeat.HAZ_CLASS ||
+        rawFeat.GENERALIZE ||
         "Parcel is inside the City's Very High Fire Hazard Severity Zone";
 
       return {
@@ -475,8 +617,25 @@ export async function lookupCityOverlays(
       };
     }
 
-    // You could add a similar block for Wildfire Evacuation Zones if you like:
-    // if (lowerLabel.includes("wildfire evacuation")) { ... }
+    // Wildfire Evacuation Zones
+    if (lowerLabel.includes("wildfire evacuation")) {
+      return {
+        ...base,
+        program: "Other",
+        name: `Wildfire Evacuation Zone: ${rawFeat.ZONE || summary || "Yes"}`,
+        details: rawFeat.DESCRIPTIO || undefined,
+      };
+    }
+
+    // Hillside areas
+    if (lowerLabel.includes("hillside") || rawFeat.STATUS?.includes("Hillside")) {
+      return {
+        ...base,
+        program: "Other",
+        name: rawFeat.STATUS || "Hillside Management Area",
+        details: summary,
+      };
+    }
 
     // ─────────────────────────────────────────────
     // SUD / HPOZ classification
@@ -486,8 +645,7 @@ export async function lookupCityOverlays(
       return {
         ...base,
         program: "SUD",
-        // For SUD we can prefer district / overlay name if present
-        name: feat.DISTRICT ?? feat.OVERLAY_NAME ?? base.name,
+        name: rawFeat.DISTRICT ?? rawFeat.OVERLAY_NAME ?? base.name,
       };
     }
 
@@ -495,20 +653,60 @@ export async function lookupCityOverlays(
       return {
         ...base,
         program: "HPOZ",
-        name: feat.HPOZ_NAME ?? feat.NAME ?? "Historic Preservation Overlay Zone",
-        details: feat.DESCRIPTIO ?? base.details,
+        name: rawFeat.HPOZ_NAME ?? rawFeat.NAME ?? "Historic Preservation Overlay Zone",
+        details: rawFeat.DESCRIPTIO ?? base.details,
       };
     }
 
-    // Fallback for other city overlays — MUST be one of the OverlayProgram literals
+    // Historic Districts (Pasadena)
+    if (lowerLabel.includes("historic district") || lowerLabel.includes("landmark")) {
+      return {
+        ...base,
+        program: "HPOZ",
+        name: rawFeat.NAME ?? rawFeat.HISTORIC_NAME ?? summary ?? "Historic District",
+        details: rawFeat.DESIGNATION ?? rawFeat.DESCRIPTIO ?? undefined,
+      };
+    }
+
+    // National Register
+    if (lowerLabel.includes("national register")) {
+      return {
+        ...base,
+        program: "HPOZ",
+        name: rawFeat.NAME ?? rawFeat.DISTRICT ?? "National Register Historic District",
+        details: rawFeat.LISTING ?? rawFeat.DESCRIPTIO ?? undefined,
+      };
+    }
+
+    // Fire Hazard (Pasadena / generic)
+    if (lowerLabel.includes("fire") || lowerLabel.includes("hazard")) {
+      const hazClass = rawFeat.HAZ_CLASS || rawFeat.FIRE_REVIEW_DISTRICT;
+      return {
+        ...base,
+        program: "Other",
+        name: hazClass ? `Fire Hazard: ${hazClass}` : (summary || "Fire Hazard Area"),
+        details: rawFeat.FIRE_REVIEW_DISTRICT || undefined,
+      };
+    }
+
+    // Specific Plan Areas
+    if (lowerLabel.includes("specific plan")) {
+      return {
+        ...base,
+        program: "Other",
+        name: rawFeat.SPEC_PLAN ?? rawFeat.PLAN_NAME ?? rawFeat.NAME ?? "Specific Plan Area",
+        details: rawFeat.DESCRIPTIO ?? rawFeat.PLAN_TYPE ?? undefined,
+      };
+    }
+
+    // Fallback for other city overlays
     return {
       ...base,
       program: "Other",
     };
   });
 
-
-  // Then filter out the nulls so TS knows this is OverlayCard[]
+  // Filter out nulls
   const overlays: OverlayCard[] = mapped.filter(
     (card): card is OverlayCard => card !== null
   );
@@ -642,7 +840,7 @@ export async function lookupZoning(id: string) {
   };
 }
 
-/*------OVERLAY LOOKUP--------*/
+/*------OVERLAY LOOKUP (COUNTY)--------*/
 export async function lookupOverlays(
   apn: string
 ): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string; links?: { znet?: string } }> {
@@ -697,6 +895,11 @@ export async function lookupOverlays(
       if (!attrs) continue;
 
       // ─────────────────────────────────────────────
+      // Sanitize attributes before processing
+      // ─────────────────────────────────────────────
+      const cleanAttrs = sanitizeOverlayAttributes(attrs);
+
+      // ─────────────────────────────────────────────
       // Normalize into OverlayCard
       // ─────────────────────────────────────────────
 
@@ -707,15 +910,16 @@ export async function lookupOverlays(
         // County Community Standards District
         program = "CSD";
       }
-      // If you later add other County overlay types you can extend this:
-      // else if (attrs.SEA_NAME) { program = "Other"; /* keep as Other for now */ }
 
-      // 2) Name
+      // 2) Name - create human-readable name
       let name =
         attrs.CSD_NAME ??
         attrs.SEA_NAME ??
         attrs.DISTRICT ??
-        summarizeOverlay(attrs) ??
+        attrs.NAME ??
+        attrs.TITLE ??
+        attrs.STATUS ?? // For hillside management areas
+        summarizeCountyOverlay(attrs) ??
         "County overlay";
 
       // 3) Details (optional)
@@ -725,6 +929,22 @@ export async function lookupOverlays(
         details = attrs.TITLE22;
       } else if (attrs.Type) {
         details = attrs.Type;
+      } else if (attrs.HAZ_CLASS) {
+        details = `Fire Hazard Class: ${attrs.HAZ_CLASS}`;
+        name = attrs.HAZ_CLASS === "Very High" 
+          ? "Very High Fire Hazard Severity Zone" 
+          : `Fire Hazard Zone: ${attrs.HAZ_CLASS}`;
+        program = "Other";
+      } else if (attrs.STATUS?.includes("Hillside")) {
+        name = attrs.STATUS;
+        program = "Other";
+      } else if (attrs.SEA_NAME) {
+        name = `SEA: ${attrs.SEA_NAME}`;
+        details = attrs.IMPLEMENTATION ?? attrs.SEA_TYPE ?? undefined;
+        program = "Other";
+      } else if (attrs.FLOOD_ZONE || attrs.FLD_ZONE) {
+        name = `Flood Zone: ${attrs.FLOOD_ZONE || attrs.FLD_ZONE}`;
+        program = "Other";
       }
 
       results.push({
@@ -732,41 +952,51 @@ export async function lookupOverlays(
         program,
         name,
         details,
-        attributes: attrs,
+        attributes: cleanAttrs, // ← Now sanitized
       });
     } catch (e) {
       console.log(`[OVERLAYS] query failed for ${url}`, String(e));
     }
   }
 
+  // Dedupe county overlays by name
+  const dedupMap = new Map<string, OverlayCard>();
+  for (const card of results) {
+    const key = `${card.program}::${card.name.toLowerCase()}`;
+    if (!dedupMap.has(key)) {
+      dedupMap.set(key, card);
+    }
+  }
+
   return {
     input: { apn },
-    overlays: results,
+    overlays: Array.from(dedupMap.values()),
     links: { znet: endpoints.znetViewer },
   };
 }
 
 /** Attempt to make a short human label from whatever fields the layer has. */
-function summarizeOverlay(a?: Record<string, any> | null): string | undefined {
+function summarizeCountyOverlay(a?: Record<string, any> | null): string | undefined {
   if (!a) return undefined;
 
-  // Try common field names you’ll see across those layers:
+  // Try common field names in priority order
   const candidates = [
     a.NAME, a.Title, a.TITLE, a.LABEL,
-    a.DISTRICT, a.DIST_TYPE, a.CATEGORY, a.TYPE,
+    a.DISTRICT, a.CATEGORY, a.TYPE,
     a.PLAN_NAME, a.PLAN, a.CSD_NAME,
-    a.SEA_NAME, a.CRANAME, a.RL_NAME,
-    a.ZONE, a.ZONING, a.Z_CAT, a.SPEC_PLAN,
-  ].filter(Boolean);
+    a.SEA_NAME, a.STATUS,
+    a.ZONE, a.ZONING,
+  ].filter(v => {
+    if (!v) return false;
+    const s = String(v);
+    // Skip values that look like IDs or are too short
+    if (/^OBJECTID/i.test(s)) return false;
+    if (s.length < 2) return false;
+    return true;
+  });
 
   if (candidates.length) return String(candidates[0]);
-
-  // last resort: show first two keys
-  const keys = Object.keys(a);
-  if (keys.length) {
-    const pick = keys.slice(0, 2).map(k => `${k}:${a[k]}`).join(", ");
-    return pick;
-  }
+  return undefined;
 }
 
 /* ---------------------- ASSESSOR (AIN/APN → attributes) ---------------------- */
@@ -814,7 +1044,7 @@ export async function lookupAssessor(id: string) {
   const use =
     get("UseDescription") ?? get("UseType") ?? get("UseCode") ?? null;
 
-  // Optional fields (many layers won’t have these)
+  // Optional fields (many layers won't have these)
   const maybeNums = (...keys: string[]) =>
     keys.map(k => Number(get(k)) || 0).reduce((s, n) => s + n, 0) || null;
 
