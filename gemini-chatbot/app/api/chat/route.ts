@@ -179,147 +179,178 @@ export async function POST(request: NextRequest) {
 
     // --- Step 2: live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
+    
+    // Track jurisdiction for consistent output
+    let detectedJurisdiction: string | null = null;
+    let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
+    
     try {
       if (wantsParcelLookup(lastUser)) {
         const apn = extractApn(lastUser);
         const address = extractAddress(lastUser);
 
-if (apn) {
-  // 1) Get parcel + centroid (for jurisdiction + city services)
-  const parcel = await getParcelByAINorAPN(apn);
-  if (!parcel?.geometry) {
-    throw new Error(`Parcel with APN/AIN ${apn} not found or missing geometry.`);
-  }
+        if (apn) {
+          // 1) Get parcel + centroid (for jurisdiction + city services)
+          const parcel = await getParcelByAINorAPN(apn);
+          if (!parcel?.geometry) {
+            throw new Error(`Parcel with APN/AIN ${apn} not found or missing geometry.`);
+          }
 
-  const centroid = makeCentroidFromGeom(parcel.geometry);
-  if (!centroid) {
-    throw new Error(`Could not compute centroid for APN/AIN ${apn}.`);
-  }
+          const centroid = makeCentroidFromGeom(parcel.geometry);
+          if (!centroid) {
+            throw new Error(`Could not compute centroid for APN/AIN ${apn}.`);
+          }
 
-  // 2) Jurisdiction lookup (point in 102100)
-  const j = await lookupJurisdictionPoint102100(centroid.x, centroid.y);
-  toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
+          // 2) Jurisdiction lookup (point in 102100)
+          const j = await lookupJurisdictionPoint102100(centroid.x, centroid.y);
+          
+          // Store jurisdiction for use in zoning output
+          detectedJurisdiction = j.jurisdiction || "Unknown";
+          jurisdictionSource = j.source;
+          
+          // Still add to tool context for reference
+          toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
 
-  // Log what providers we have vs what came back from DPW
-  debugProvidersLog(j.jurisdiction);
+          // Log what providers we have vs what came back from DPW
+          debugProvidersLog(j.jurisdiction);
 
-  if (j?.source === "CITY") {
-    const cityName = j.jurisdiction || "";
-    const provider = getCityProvider(cityName);
+          if (j?.source === "CITY") {
+            const cityName = j.jurisdiction || "";
+            const provider = getCityProvider(cityName);
 
-    // --- CITY ZONING ---
-    if (SHOW_ZONING) {
-      if (provider) {
-        const cityZ = await lookupCityZoning(apn, provider);
-        // cityZ already has a 'card' shape; stringify that for the model
-        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cityZ.card ?? cityZ, null, 2)}`;
-      } else {
-        // City parcel but not in CITY_PROVIDERS_JSON
-        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(
-          {
-            note: "Parcel is in a city not yet configured; county zoning does not apply.",
-            city: cityName,
-          },
-          null,
-          2
-        )}`;
+            // --- CITY ZONING ---
+            if (SHOW_ZONING) {
+              if (provider) {
+                const cityZ = await lookupCityZoning(apn, provider);
+                
+                // IMPORTANT: Inject jurisdiction into the zoning card
+                const cardWithJurisdiction = {
+                  ...(cityZ.card ?? cityZ),
+                  jurisdiction: detectedJurisdiction,
+                };
+                
+                toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cardWithJurisdiction, null, 2)}`;
+              } else {
+                // City parcel but not in CITY_PROVIDERS_JSON
+                toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(
+                  {
+                    jurisdiction: detectedJurisdiction,
+                    note: "Parcel is in a city not yet configured; county zoning does not apply.",
+                    city: cityName,
+                  },
+                  null,
+                  2
+                )}`;
+              }
+            }
+
+            // --- CITY OVERLAYS (now live; falls back gracefully) ---
+            if (SHOW_OVERLAYS) {
+              if (
+                provider &&
+                provider.method === "arcgis_query" &&
+                Array.isArray(provider.overlays) &&
+                provider.overlays.length > 0
+              ) {
+                // Ensure we have centroid in 102100
+                const centroid = makeCentroidFromGeom(parcel.geometry);
+
+                if (centroid) {
+                  const { overlays, note } = await lookupCityOverlays(
+                    centroid,
+                    provider.overlays
+                  );
+
+                  toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+                    {
+                      jurisdiction: detectedJurisdiction,
+                      city: cityName,
+                      overlays,
+                      note: note ?? undefined
+                    },
+                    null,
+                    2
+                  )}`;
+                } else {
+                  // Fallback if centroid could not be computed
+                  toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+                    {
+                      jurisdiction: detectedJurisdiction,
+                      city: cityName,
+                      overlays: [] as any[],
+                      note: "Failed to compute centroid for city overlays; use the city's GIS viewer.",
+                      viewer: "viewer" in provider ? provider.viewer : null
+                    },
+                    null,
+                    2
+                  )}`;
+                }
+              } else {
+                // No overlay bundles configured for this city
+                toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
+                  {
+                    jurisdiction: detectedJurisdiction,
+                    city: cityName,
+                    overlays: [] as any[],
+                    note: "City parcel; use the city's GIS for overlays/specific plans.",
+                    viewer: provider && "viewer" in provider ? provider.viewer : null
+                  },
+                  null,
+                  2
+                )}`;
+              }
+            }
+
+            // --- ASSESSOR (still County-wide) ---
+            if (SHOW_ASSESSOR) {
+              const a = await lookupAssessor(apn).catch(() => null);
+              if (a) {
+                toolContext += `\n[TOOL:assessor]\n${JSON.stringify(a, null, 2)}`;
+              }
+            }
+
+            // NOTE: For CITY parcels we intentionally skip County zoning/overlay layers.
+          } else {
+            // --- COUNTY / UNINCORPORATED FLOW ---
+            
+            // Set jurisdiction for unincorporated areas
+            if (!detectedJurisdiction || detectedJurisdiction === "Unknown") {
+              detectedJurisdiction = "Unincorporated LA County";
+            }
+            
+            const [zRes, aRes, oRes] = await Promise.allSettled([
+              SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
+              SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
+              SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+            ]);
+
+            if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
+              // IMPORTANT: Inject jurisdiction into county zoning output
+              const zoningWithJurisdiction = {
+                jurisdiction: detectedJurisdiction,
+                ...zRes.value,
+              };
+              toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zoningWithJurisdiction, null, 2)}`;
+            }
+            if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
+              toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
+            }
+            if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
+              // IMPORTANT: Inject jurisdiction into county overlays output
+              const overlaysWithJurisdiction = {
+                jurisdiction: detectedJurisdiction,
+                ...oRes.value,
+              };
+              toolContext += `\n[TOOL:overlays]\n${JSON.stringify(overlaysWithJurisdiction, null, 2)}`;
+            }
+          }
+        } else if (address) {
+          toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
+        } else {
+          toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
+        }
       }
-    }
-
-    // --- CITY OVERLAYS (now live; falls back gracefully) ---
-
-if (SHOW_OVERLAYS) {
-  if (
-    provider &&
-    provider.method === "arcgis_query" &&
-    Array.isArray(provider.overlays) &&
-    provider.overlays.length > 0
-  ) {
-    // Ensure we have centroid in 102100
-    const centroid = makeCentroidFromGeom(parcel.geometry);
-
-    if (centroid) {
-      const { overlays, note } = await lookupCityOverlays(
-
-        centroid,
-        provider.overlays
-      );
-
-      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
-        {
-          city: cityName,         // "City of Los Angeles" / "Pasadena"
-          overlays,               // OverlayCard[]
-          note: note ?? undefined // optional note from lookupCityOverlays
-        },
-        null,
-        2
-      )}`;
-    } else {
-      // Fallback if centroid could not be computed
-      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
-        {
-          city: cityName,
-          overlays: [] as any[],  // no overlays because we couldn't query
-          note:
-            "Failed to compute centroid for city overlays; use the city's GIS viewer.",
-          viewer: "viewer" in provider ? provider.viewer : null
-        },
-        null,
-        2
-      )}`;
-    }
-  } else {
-    // No overlay bundles configured for this city
-    toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify(
-      {
-        city: cityName,
-        overlays: [] as any[],
-        note:
-          "City parcel; use the city's GIS for overlays/specific plans.",
-        viewer: provider && "viewer" in provider ? provider.viewer : null
-      },
-      null,
-      2
-    )}`;
-  }
-}
-
-
-    // --- ASSESSOR (still County-wide) ---
-    if (SHOW_ASSESSOR) {
-      const a = await lookupAssessor(apn).catch(() => null);
-      if (a) {
-        toolContext += `\n[TOOL:assessor]\n${JSON.stringify(a, null, 2)}`;
-      }
-    }
-
-    // NOTE: For CITY parcels we intentionally skip County zoning/overlay layers.
-  } else {
-    // --- COUNTY / UNINCORPORATED FLOW ---
-    const [zRes, aRes, oRes] = await Promise.allSettled([
-      SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
-      SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
-      SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
-    ]);
-
-    if (SHOW_ZONING && zRes.status === "fulfilled" && zRes.value) {
-      toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zRes.value, null, 2)}`;
-    }
-    if (SHOW_ASSESSOR && aRes.status === "fulfilled" && aRes.value) {
-      toolContext += `\n[TOOL:assessor]\n${JSON.stringify(aRes.value, null, 2)}`;
-    }
-    if (SHOW_OVERLAYS && oRes.status === "fulfilled" && oRes.value) {
-      toolContext += `\n[TOOL:overlays]\n${JSON.stringify(oRes.value, null, 2)}`;
-    }
-  }
-} else if (address) {
-  toolContext += `\n[TOOL_NOTE] Address detected but address→parcel is not implemented yet. Provide an APN/AIN to fetch zoning/assessor details.`;
-} else {
-  toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected.`;
-}
-
-}
-     } catch (e) {
+    } catch (e) {
       toolContext += `\n[TOOL_ERROR] ${String(e)}`;
     }
 
@@ -351,6 +382,11 @@ RULES
   internal IDs, or URLs.
 - Do not mention tools, JSON, or APIs in the final answer.
 
+IMPORTANT - JURISDICTION
+- The Zoning section MUST always include JURISDICTION as the first field.
+- Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County").
+- This tells the user which city or county rules apply to their parcel.
+
 FORMAT
 - Structure your answer into up to three sections, in this order:
   Zoning
@@ -358,6 +394,7 @@ FORMAT
   Assessor
 - Put each section heading alone on its own line, exactly as written above.
 - Under each heading, only write KEY: VALUE lines.
+- For the Zoning section, always start with JURISDICTION: <value>
 `.trim();
 
     
@@ -398,7 +435,6 @@ const combinedPrompt = [
     }
 
     // Defensive post-filter
-      // Defensive post-filter
     try {
       if (text) {
         const removeSection = (input: string, heading: string) => {
