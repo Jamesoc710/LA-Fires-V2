@@ -5,14 +5,17 @@ import { Message } from '../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-// NEW: viewer links (safe to import client-side; they're static urls)
+// Viewer links (safe to import client-side; they're static urls)
 import {
   assessorParcelUrl,
   znetViewerUrl,
   gisnetViewerUrl,
+  // FIX #5: Import new viewer URL helpers
+  getViewerUrlForJurisdiction,
+  shouldShowCountyViewers,
 } from '@/lib/la/endpoints';
 
-// NEW: simple file download
+// Simple file download helper
 function downloadFile(filename: string, contents: string, mime = 'application/json') {
   const blob = new Blob([contents], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -27,7 +30,7 @@ function downloadFile(filename: string, contents: string, mime = 'application/js
 
 type SectionData = Record<string, string>;
 
-// NEW: Grouped overlay structure
+// Grouped overlay structure
 type OverlayCategory = {
   name: string;
   items: string[];
@@ -43,8 +46,11 @@ type ParsedReply = {
   ain?: string;
   zoning?: SectionData;
   overlays?: SectionData;           // legacy flat format
-  groupedOverlays?: GroupedOverlays; // NEW: grouped format
+  groupedOverlays?: GroupedOverlays; // grouped format
   assessor?: SectionData;
+  // FIX #9: Track if this is an error response
+  isParcelNotFound?: boolean;
+  errorMessage?: string;
 };
 type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
 
@@ -107,7 +113,7 @@ function addKV(data: SectionData, k: string, v: string) {
   data[key] = v;
 }
 
-// NEW: Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
+// Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
 function isCategoryHeader(line: string): string | null {
   const trimmed = line.trim();
   // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "OTHER:" etc.
@@ -124,7 +130,7 @@ function isCategoryHeader(line: string): string | null {
   return null;
 }
 
-// NEW: Check if a line is a bullet item
+// Check if a line is a bullet item
 function isBulletItem(line: string): string | null {
   const trimmed = line.trim();
   // Match lines starting with bullet character or dash
@@ -135,7 +141,7 @@ function isBulletItem(line: string): string | null {
   return null;
 }
 
-// NEW: Parse grouped overlays format
+// Parse grouped overlays format
 function parseGroupedOverlays(lines: string[], startIndex: number): { end: number; data: GroupedOverlays } {
   const data: GroupedOverlays = { categories: [] };
   let i = startIndex + 1;
@@ -191,7 +197,7 @@ function parseGroupedOverlays(lines: string[], startIndex: number): { end: numbe
   return { end: i, data };
 }
 
-// NEW: Check if overlays section uses grouped format
+// Check if overlays section uses grouped format
 function isGroupedOverlayFormat(lines: string[], startIndex: number): boolean {
   // Look ahead to see if we find category headers or bullets
   for (let i = startIndex + 1; i < Math.min(startIndex + 10, lines.length); i++) {
@@ -206,9 +212,21 @@ function isGroupedOverlayFormat(lines: string[], startIndex: number): boolean {
 function parseAssistantText(text: string): ParsedReply | null {
   if (!text) return null;
   const lines = text.split(/\r?\n/);
-  const nonEmptyLines = lines.filter(l => l.trim().length > 0);
 
   const parsed: ParsedReply = { raw: text };
+
+  // FIX #9: Detect parcel not found error
+  if (
+    text.toLowerCase().includes('parcel') &&
+    (text.toLowerCase().includes('not found') || text.toLowerCase().includes('no parcel'))
+  ) {
+    parsed.isParcelNotFound = true;
+    // Try to extract the error message
+    const errorMatch = text.match(/(?:parcel.*?not found|no parcel found)[^.]*\./i);
+    if (errorMatch) {
+      parsed.errorMessage = errorMatch[0];
+    }
+  }
 
   // Try to capture APN/AIN from anywhere
   const ain = text.match(/\bAIN[:\s-]*([0-9]{10})\b/i)?.[1];
@@ -269,6 +287,37 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+// FIX #7, #8: Format values with units for display
+function formatValueWithUnits(key: string, value: string): string {
+  const normalizedKey = key.toUpperCase().replace(/[_\s]/g, '');
+  
+  // Skip formatting for certain values
+  if (!value || value === 'None' || value === 'N/A' || value === 'null' || value === '0') {
+    if (normalizedKey === 'LIVINGAREA' || normalizedKey === 'LOTSQFT' || normalizedKey === 'LOTSQUAREFEET') {
+      return 'Not available';
+    }
+    return value;
+  }
+  
+  // FIX #7: Format LIVINGAREA with commas and "sq ft"
+  if (normalizedKey === 'LIVINGAREA' || normalizedKey === 'SQFTMAIN') {
+    const num = parseFloat(value.replace(/,/g, ''));
+    if (!isNaN(num) && num > 0) {
+      return `${num.toLocaleString()} sq ft`;
+    }
+  }
+  
+  // FIX #8: Format LOTSQFT with commas and "sq ft"
+  if (normalizedKey === 'LOTSQFT' || normalizedKey === 'LOTAREA' || normalizedKey === 'LOTSQUAREFEET') {
+    const num = parseFloat(value.replace(/,/g, ''));
+    if (!isNaN(num) && num > 0) {
+      return `${num.toLocaleString()} sq ft`;
+    }
+  }
+  
+  return value;
+}
+
 function SectionCard({
   title,
   data,
@@ -300,7 +349,8 @@ function SectionCard({
             <dt className="w-40 shrink-0 text-sm font-semibold text-slate-800 dark:text-slate-200">
               {k.replace(/_/g, ' ')}:
             </dt>
-            <dd className="text-sm">{v}</dd>
+            {/* FIX #7, #8: Apply unit formatting for assessor fields */}
+            <dd className="text-sm">{formatValueWithUnits(k, v)}</dd>
           </div>
         ))}
       </dl>
@@ -308,7 +358,14 @@ function SectionCard({
   );
 }
 
-// NEW: Grouped Overlays Card Component
+// FIX #10 (Option B): Define known overlay categories that should always show
+const KNOWN_OVERLAY_CATEGORIES = [
+  'HAZARDS',
+  'HISTORIC PRESERVATION',
+  'LAND USE & PLANNING',
+];
+
+// Grouped Overlays Card Component with FIX #10
 function GroupedOverlaysCard({
   data,
   onCopy,
@@ -316,6 +373,30 @@ function GroupedOverlaysCard({
   data: GroupedOverlays;
   onCopy: () => void;
 }) {
+  // FIX #10: Ensure known categories always appear, even if empty
+  const existingCategoryNames = new Set(data.categories.map(c => c.name.toUpperCase()));
+  const categoriesWithPlaceholders: OverlayCategory[] = [...data.categories];
+  
+  // Add "None found" placeholders for missing known categories
+  for (const knownCat of KNOWN_OVERLAY_CATEGORIES) {
+    if (!existingCategoryNames.has(knownCat)) {
+      categoriesWithPlaceholders.push({
+        name: knownCat,
+        items: ['None found for this parcel'],
+      });
+    }
+  }
+  
+  // Sort categories: Hazards first, then Historic, then Land Use, then others
+  const categoryOrder = ['HAZARDS', 'HISTORIC PRESERVATION', 'LAND USE & PLANNING', 'SUPPLEMENTAL USE DISTRICTS', 'OTHER'];
+  categoriesWithPlaceholders.sort((a, b) => {
+    const aIndex = categoryOrder.indexOf(a.name.toUpperCase());
+    const bIndex = categoryOrder.indexOf(b.name.toUpperCase());
+    const aOrder = aIndex === -1 ? 999 : aIndex;
+    const bOrder = bIndex === -1 ? 999 : bIndex;
+    return aOrder - bOrder;
+  });
+
   return (
     <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
       <div className="flex items-center justify-between mb-2">
@@ -343,21 +424,66 @@ function GroupedOverlaysCard({
 
       {/* Categories */}
       <div className="space-y-4">
-        {data.categories.map((category, idx) => (
-          <div key={idx}>
-            <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              {category.name}
-            </h4>
-            <ul className="space-y-1 ml-1">
-              {category.items.map((item, itemIdx) => (
-                <li key={itemIdx} className="text-sm flex items-start gap-2">
-                  <span className="text-slate-400 dark:text-slate-500 select-none">•</span>
-                  <span>{item}</span>
-                </li>
-              ))}
+        {categoriesWithPlaceholders.map((category, idx) => {
+          const isPlaceholder = category.items.length === 1 && category.items[0] === 'None found for this parcel';
+          return (
+            <div key={idx}>
+              <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                {category.name}
+              </h4>
+              <ul className="space-y-1 ml-1">
+                {category.items.map((item, itemIdx) => (
+                  <li 
+                    key={itemIdx} 
+                    className={`text-sm flex items-start gap-2 ${isPlaceholder ? 'text-slate-500 dark:text-slate-400 italic' : ''}`}
+                  >
+                    <span className="text-slate-400 dark:text-slate-500 select-none">•</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// FIX #9: Error card for invalid APN
+function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }) {
+  return (
+    <div className="rounded-2xl bg-orange-50 dark:bg-orange-900/30 text-orange-900 dark:text-orange-100 ring-1 ring-orange-200 dark:ring-orange-700 p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex-shrink-0">
+          <svg className="h-6 w-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold mb-1">Parcel Not Found</h3>
+          <p className="text-sm mb-2">
+            {message || `No parcel found for ${apn ? `APN ${apn}` : 'the provided number'} in LA County records.`}
+          </p>
+          <div className="text-sm space-y-1">
+            <p className="font-medium">Please check:</p>
+            <ul className="list-disc list-inside ml-2 space-y-0.5">
+              <li>APNs are 10 digits (e.g., 5843-004-015)</li>
+              <li>The number matches your property tax bill</li>
+              <li>The parcel is in LA County</li>
             </ul>
           </div>
-        ))}
+          <div className="mt-3">
+            <a
+              href="https://portal.assessor.lacounty.gov/"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center text-sm font-medium text-orange-700 dark:text-orange-300 hover:underline"
+            >
+              Look up your APN on the Assessor Portal ↗
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -483,6 +609,23 @@ function clearChat() {
     const parsed = useMemo(() => parseAssistantText(text), [text]);
     const showRaw = showRawForIndex === index;
 
+    // FIX #4, #5: Extract jurisdiction for conditional viewer links
+    const jurisdiction = useMemo(() => {
+      // Try to get jurisdiction from zoning data
+      if (parsed?.zoning?.JURISDICTION) {
+        return parsed.zoning.JURISDICTION;
+      }
+      // Try from grouped overlays
+      if (parsed?.groupedOverlays?.jurisdiction) {
+        return parsed.groupedOverlays.jurisdiction;
+      }
+      return null;
+    }, [parsed]);
+
+    // FIX #4, #5: Determine which viewer links to show
+    const showCountyViewers = shouldShowCountyViewers(jurisdiction);
+    const cityViewer = getViewerUrlForJurisdiction(jurisdiction);
+
     // Build "copy all" text quickly (sections if present, else raw)
     const buildCopyAll = () => {
       const blocks: string[] = [];
@@ -514,6 +657,11 @@ function clearChat() {
 
   return (
     <div className="w-full max-w-[80%] space-y-3">
+      {/* FIX #9: Show error card for parcel not found */}
+      {parsed?.isParcelNotFound && (
+        <ParcelNotFoundCard apn={parsed.apn} message={parsed.errorMessage} />
+      )}
+
       {/* header row: chips + viewer links + actions */}
       <div className="flex flex-wrap gap-2 items-center">
         {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
@@ -531,24 +679,43 @@ function clearChat() {
             Assessor ↗
           </a>
         )}
-        <a
-          href={znetViewerUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-          title="Open ZNET Viewer"
-        >
-          ZNET ↗
-        </a>
-        <a
-          href={gisnetViewerUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-          title="Open GISNET"
-        >
-          GISNET ↗
-        </a>
+        
+        {/* FIX #5: City-specific viewer link */}
+        {cityViewer && (
+          <a
+            href={cityViewer.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            title={`Open ${cityViewer.name}`}
+          >
+            {cityViewer.name} ↗
+          </a>
+        )}
+        
+        {/* FIX #4: Only show ZNET/GISNET for unincorporated areas */}
+        {showCountyViewers && (
+          <>
+            <a
+              href={znetViewerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+              title="Open ZNET Viewer"
+            >
+              ZNET ↗
+            </a>
+            <a
+              href={gisnetViewerUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+              title="Open GISNET"
+            >
+              GISNET ↗
+            </a>
+          </>
+        )}
 
         {/* actions for this reply */}
         <div className="ml-auto flex gap-2">
@@ -597,7 +764,7 @@ function clearChat() {
         />
       )}
       
-      {/* NEW: Render grouped overlays if present, otherwise legacy flat format */}
+      {/* Render grouped overlays if present, otherwise legacy flat format */}
       {parsed?.groupedOverlays && (
         <GroupedOverlaysCard
           data={parsed.groupedOverlays}
@@ -626,7 +793,7 @@ function clearChat() {
           data={parsed.assessor}
           onCopy={() => {
             const block = Object.entries(parsed.assessor!)
-              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${formatValueWithUnits(k, v)}`)
               .join('\n');
             navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
           }}
@@ -721,6 +888,18 @@ return (
         Clear chat
       </button>
       <span className="hidden sm:inline">History is saved locally.</span>
+    </div>
+
+    {/* FIX #1, #2, #3: Disclaimer block */}
+    <div className="px-4 pb-2 border-t border-slate-200 dark:border-slate-700 pt-2">
+      <p className="text-xs text-slate-500 dark:text-slate-400 text-center leading-relaxed">
+        <span className="font-medium">⚠️ Data shown is for informational purposes only.</span>
+        {' '}Not an official zoning determination. Some overlay types may not be included. Data may not reflect recent zone changes.
+        {' '}Verify all information with the appropriate planning department before making decisions.
+      </p>
+      <p className="text-xs text-slate-400 dark:text-slate-500 text-center mt-1">
+        Contact your local planning department for official determinations.
+      </p>
     </div>
 
     {/* input form */}
