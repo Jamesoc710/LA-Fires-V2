@@ -114,15 +114,16 @@ function addKV(data: SectionData, k: string, v: string) {
 }
 
 // Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
+// FIX #11, #12, #13: Extended to recognize new category names (Environmental Protection, Development Regulations, Community Standards, Additional Overlays)
 function isCategoryHeader(line: string): string | null {
   const trimmed = line.trim();
-  // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "OTHER:" etc.
+  // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "ENVIRONMENTAL PROTECTION:" etc.
   // Must be all caps (or title case) and end with colon, no value after
   const match = trimmed.match(/^([A-Z][A-Z\s&]+):$/);
   if (match) {
     return match[1].trim();
   }
-  // Also match title case like "Land Use & Planning:"
+  // Also match title case like "Land Use & Planning:", "Environmental Protection:", "Development Regulations:" etc.
   const titleMatch = trimmed.match(/^([A-Z][a-zA-Z\s&]+):$/);
   if (titleMatch && !trimmed.includes('—')) {
     return titleMatch[1].trim();
