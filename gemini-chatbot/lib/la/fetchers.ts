@@ -473,6 +473,54 @@ const OVERLAY_BASE_PARAMS = {
   spatialRel: "esriSpatialRelIntersects",
 };
 
+// FIX #17: Helper to add context to bare historic names
+function enhanceHistoricName(name: string | undefined, layerLabel: string): string {
+  if (!name) return "Historic Property";
+  
+  const nameLower = name.toLowerCase();
+  const labelLower = layerLabel.toLowerCase();
+  
+  // If name is very short (1-2 words) and doesn't already include "district" or "historic"
+  const wordCount = name.trim().split(/\s+/).length;
+  const alreadyDescriptive = 
+    nameLower.includes('district') || 
+    nameLower.includes('historic') ||
+    nameLower.includes('landmark') ||
+    nameLower.includes('national register');
+  
+  if (wordCount <= 2 && !alreadyDescriptive) {
+    // Add context based on the layer type
+    if (labelLower.includes('historic district') || labelLower.includes('designated historic')) {
+      return `${name} Historic District`;
+    }
+    if (labelLower.includes('landmark district')) {
+      return `${name} Landmark District`;
+    }
+    if (labelLower.includes('landmark building')) {
+      return `${name} (Landmark Building)`;
+    }
+    if (labelLower.includes('national register')) {
+      return `${name} (National Register)`;
+    }
+    if (labelLower.includes('eligible') && labelLower.includes('historic')) {
+      return `${name} (Eligible Historic District)`;
+    }
+  }
+  
+  return name;
+}
+
+// FIX #17: Check if this is a generic "Historic Properties" designation
+function isGenericHistoricPropertiesHit(rawFeat: Record<string, any>, label: string): boolean {
+  // The layer might just be telling us the parcel IS on the historic properties list
+  // without a specific property name
+  const labelLower = label.toLowerCase();
+  return labelLower.includes('historic properties') && 
+         !rawFeat.HISTORIC_NAME && 
+         !rawFeat.NAME && 
+         !rawFeat.PROPERTY;
+}
+
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
   centroid102100: ArcgisPoint102100,
@@ -600,17 +648,22 @@ export async function lookupCityOverlays(
       };
     }
 
-    // Very High Fire Hazard Severity Zones (LA City)
+    // FIX #15: Very High Fire Hazard Severity Zones (LA City) - remove redundant description
     if (
       lowerLabel.includes("very high fire hazard") ||
       lowerLabel.includes("very_high_fire")
     ) {
       const name = "Very High Fire Hazard Severity Zone";
-
-      const details =
-        rawFeat.HAZ_CLASS ||
-        rawFeat.GENERALIZE ||
-        "Parcel is inside the City's Very High Fire Hazard Severity Zone";
+      
+      // FIX #15: Don't include redundant "Parcel is inside..." text
+      // Only include HAZ_CLASS or GENERALIZE if they add new information
+      let details: string | undefined = undefined;
+      if (rawFeat.HAZ_CLASS && rawFeat.HAZ_CLASS !== "Very High") {
+        details = rawFeat.HAZ_CLASS;
+      } else if (rawFeat.GENERALIZE && !rawFeat.GENERALIZE.toLowerCase().includes('parcel')) {
+        details = rawFeat.GENERALIZE;
+      }
+      // Otherwise, no details needed - the name is self-explanatory
 
       return {
         ...base,
@@ -661,22 +714,78 @@ export async function lookupCityOverlays(
       };
     }
 
-    // Historic Districts (Pasadena)
-    if (lowerLabel.includes("historic district") || lowerLabel.includes("landmark")) {
+    // FIX #17: Historic Districts (Pasadena) - add context to bare names
+    if (lowerLabel.includes("historic district") || lowerLabel.includes("landmark district")) {
+      const rawName = rawFeat.NAME ?? rawFeat.HISTORIC_NAME ?? summary;
+      const enhancedName = enhanceHistoricName(rawName, label);
+      
       return {
         ...base,
         program: "HPOZ",
-        name: rawFeat.NAME ?? rawFeat.HISTORIC_NAME ?? summary ?? "Historic District",
+        name: enhancedName,
         details: rawFeat.DESIGNATION ?? rawFeat.DESCRIPTIO ?? undefined,
+      };
+    }
+
+    // FIX #17: Landmark Buildings
+    if (lowerLabel.includes("landmark building")) {
+      const rawName = rawFeat.HISTORIC_NAME ?? rawFeat.NAME ?? summary;
+      const enhancedName = enhanceHistoricName(rawName, label);
+      
+      return {
+        ...base,
+        program: "HPOZ",
+        name: enhancedName,
+        details: rawFeat.DESIGNATION ?? rawFeat.DESCRIPTIO ?? undefined,
+      };
+    }
+
+    // FIX #17: Historic Properties (Pasadena) - handle generic hits
+    if (lowerLabel.includes("historic properties")) {
+      if (isGenericHistoricPropertiesHit(rawFeat, label)) {
+        // This is just a flag that the parcel is on the historic properties list
+        return {
+          ...base,
+          program: "HPOZ",
+          name: "Listed on Historic Properties Registry",
+          details: rawFeat.DESIGNATION ?? rawFeat.TYPE ?? undefined,
+        };
+      }
+      
+      // Has a specific property name
+      const rawName = rawFeat.HISTORIC_NAME ?? rawFeat.NAME ?? rawFeat.PROPERTY ?? summary;
+      const enhancedName = enhanceHistoricName(rawName, label);
+      
+      return {
+        ...base,
+        program: "HPOZ",
+        name: enhancedName,
+        details: rawFeat.DESIGNATION ?? rawFeat.TYPE ?? rawFeat.DESCRIPTIO ?? undefined,
+      };
+    }
+
+    // FIX #17: Eligible Historic Districts
+    if (lowerLabel.includes("eligible") && (lowerLabel.includes("historic") || lowerLabel.includes("landmark"))) {
+      const rawName = rawFeat.NAME ?? rawFeat.DISTRICT ?? summary;
+      const enhancedName = enhanceHistoricName(rawName, label);
+      
+      return {
+        ...base,
+        program: "HPOZ",
+        name: enhancedName,
+        details: rawFeat.STATUS ?? rawFeat.DESCRIPTIO ?? "Eligible but not yet designated",
       };
     }
 
     // National Register
     if (lowerLabel.includes("national register")) {
+      const rawName = rawFeat.NAME ?? rawFeat.DISTRICT ?? summary;
+      const enhancedName = enhanceHistoricName(rawName, label);
+      
       return {
         ...base,
         program: "HPOZ",
-        name: rawFeat.NAME ?? rawFeat.DISTRICT ?? "National Register Historic District",
+        name: enhancedName,
         details: rawFeat.LISTING ?? rawFeat.DESCRIPTIO ?? undefined,
       };
     }
@@ -770,7 +879,8 @@ export async function lookupZoning(id: string) {
           description: a1.Z_DESC ?? null,
           category: a1.Z_CATEGORY ?? null,
           planningArea: a1.PLNG_AREA ?? null,
-          title22: a1.TITLE_22 ?? null,
+          // FIX #16: Don't include raw TITLE22 code - it's meaningless to users
+          // title22: a1.TITLE_22 ?? null,
         },
         links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
         method: "polygon",
@@ -796,7 +906,8 @@ export async function lookupZoning(id: string) {
             description: a2.Z_DESC ?? null,
             category: a2.Z_CATEGORY ?? null,
             planningArea: a2.PLNG_AREA ?? null,
-            title22: a2.TITLE_22 ?? null,
+            // FIX #16: Don't include raw TITLE22 code
+            // title22: a2.TITLE_22 ?? null,
           },
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "envelope",
@@ -823,7 +934,8 @@ export async function lookupZoning(id: string) {
             description: a3.Z_DESC ?? null,
             category: a3.Z_CATEGORY ?? null,
             planningArea: a3.PLNG_AREA ?? null,
-            title22: a3.TITLE_22 ?? null,
+            // FIX #16: Don't include raw TITLE22 code
+            // title22: a3.TITLE_22 ?? null,
           },
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "centroid",
@@ -928,9 +1040,8 @@ export async function lookupOverlays(
       // 3) Details (optional)
       let details: string | undefined = undefined;
 
-      if (attrs.TITLE22) {
-        details = attrs.TITLE22;
-      } else if (attrs.Type) {
+      // FIX #16: Don't show raw TITLE22 codes - they're meaningless to users
+      if (attrs.Type) {
         details = attrs.Type;
       } else if (attrs.HAZ_CLASS) {
         details = `Fire Hazard Class: ${attrs.HAZ_CLASS}`;
