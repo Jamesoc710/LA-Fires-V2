@@ -68,11 +68,11 @@ interface OverlayCard {
   attributes?: Record<string, any>;
 }
 
-// FIX #11, #12, #13: Expanded category types
+// FIX #11, #12, #13, #23: Expanded category types
 type OverlayCategory = 
   | "Hazards"
   | "Environmental Protection"      // FIX #11: SEA moved here
-  | "Development Regulations"       // FIX #12: HMA moved here
+  | "Development Regulations"       // FIX #12: HMA moved here; FIX #23: Sign districts
   | "Historic Preservation"
   | "Supplemental Use Districts"
   | "Community Standards"           // FIX #13: CSD category
@@ -161,6 +161,14 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Development Regulations";
   }
   
+  // FIX #23: Sign Districts - categorize as Development Regulations
+  if (
+    combined.includes("sign district") ||
+    combined.includes("sign_dist")
+  ) {
+    return "Development Regulations";
+  }
+  
   // FIX #13: Community Standards Districts
   if (
     card.program === "CSD" ||
@@ -171,14 +179,19 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Community Standards";
   }
   
-  // Hazards - critical for rebuild safety
-  // Note: "hillside" alone no longer triggers Hazards (moved to Dev Regulations)
-  // But "landslide" IS a hazard
+  // FIX #20, #21: Hazards - critical for rebuild safety
+  // Includes fire hazards, evacuation zones, and flood zones
   if (
     combined.includes("fire") ||
     combined.includes("hazard") ||
     combined.includes("flood") ||
-    combined.includes("evacuation") ||
+    combined.includes("fema") ||           // FIX #21: FEMA flood zones
+    combined.includes("sfha") ||           // FIX #21: Special Flood Hazard Area
+    combined.includes("floodplain") ||     // FIX #21
+    combined.includes("floodway") ||       // FIX #21
+    combined.includes("evacuation") ||     // FIX #20: Evacuation zones
+    combined.includes("evac zone") ||      // FIX #20
+    combined.includes("ready set go") ||   // FIX #20: LA City evacuation program
     combined.includes("landslide") ||
     combined.includes("fault") ||
     combined.includes("liquefaction") ||
@@ -188,14 +201,15 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Hazards";
   }
   
-  // Historic Preservation
+  // FIX #24: Historic Preservation - includes Historic Cultural Monuments
   if (
     card.program === "HPOZ" ||
     combined.includes("historic") ||
     combined.includes("hpoz") ||
     combined.includes("landmark") ||
     combined.includes("national register") ||
-    combined.includes("monument")
+    combined.includes("monument") ||
+    combined.includes("hcm")              // FIX #24: Historic Cultural Monument
   ) {
     return "Historic Preservation";
   }
@@ -209,7 +223,7 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Supplemental Use Districts";
   }
   
-  // Land Use & Planning (expanded to catch density designations)
+  // FIX #22: Land Use & Planning - includes Specific Plans
   if (
     combined.includes("general plan") ||
     combined.includes("specific plan") ||
@@ -579,10 +593,15 @@ export async function POST(request: NextRequest) {
 
                     if (centroidForOverlays) {
                       try {
-                        const { overlays, note } = await lookupCityOverlays(
+                        const { overlays, note, audit } = await lookupCityOverlays(
                           centroidForOverlays,
                           provider.overlays
                         );
+
+                        // FIX #25: Log audit summary
+                        if (audit) {
+                          console.log(`[CHAT] Overlay audit: ${audit.length} layers queried, ${audit.filter(a => a.cardCreated).length} cards created`);
+                        }
 
                         if (overlays && overlays.length > 0) {
                           overlaysStatus = "success";
