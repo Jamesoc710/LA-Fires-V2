@@ -32,7 +32,7 @@ export type AssessorResult = {
 
 export type OverlaySource  =   "County" | "City";
 
-export type OverlayProgram = "CSD" | "SUD" | "HPOZ" | "Other";
+export type OverlayProgram = "CSD" | "SUD" | "HPOZ" | "SEA" | "Other";
 
 export type OverlayCard = {
   /** Where this overlay came from (DRP vs City) */
