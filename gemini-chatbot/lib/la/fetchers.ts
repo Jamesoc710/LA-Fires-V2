@@ -242,16 +242,7 @@ const OVERLAY_FIELD_PRIORITY = [
   'SEA_TYPE', 'IMPLEMENTATION',
   
   // Flood
-  'FLOOD_ZONE', 'FLD_ZONE', 'ZONE_SUBTY', 'SFHA_TF',
-  
-  // FIX #20: Evacuation zones
-  'ZONE', 'EVAC_ZONE', 'EVACUATION_ZONE',
-  
-  // FIX #23: Sign districts
-  'SIGN_DIST', 'SIGN_DISTRICT',
-  
-  // FIX #24: Historic monuments
-  'HCM_NAME', 'HCM_NUMBER', 'MONUMENT_NUMBER',
+  'FLOOD_ZONE', 'FLD_ZONE', 'ZONE_SUBTY',
 ];
 
 /**
@@ -530,24 +521,12 @@ function isGenericHistoricPropertiesHit(rawFeat: Record<string, any>, label: str
          !rawFeat.PROPERTY;
 }
 
-// FIX #25: Overlay audit tracking for debugging
-interface OverlayAuditEntry {
-  layer: string;
-  sublayer?: string;
-  featuresReturned: number;
-  cardCreated: boolean;
-  reason?: string;
-}
-
 /** Query city overlays at a parcel centroid (102100). */
 export async function lookupCityOverlays(
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
-): Promise<{ overlays: OverlayCard[]; note?: string; audit?: OverlayAuditEntry[] }> {
+): Promise<{ overlays: OverlayCard[]; note?: string }> {
   const results: OverlayHit[] = [];
-  
-  // FIX #25: Track audit data
-  const audit: OverlayAuditEntry[] = [];
 
   for (const b of bundles || []) {
     try {
@@ -559,22 +538,13 @@ export async function lookupCityOverlays(
           geometryType: "esriGeometryPoint",
           geometry: JSON.stringify(centroid102100),
         });
-        
-        const featuresCount = r?.features?.length ?? 0;
         const feat = r?.features?.[0]?.attributes;
-        
-        // FIX #25: Log what we got
-        console.log(`[OVERLAY_AUDIT] ${b.label}: ${featuresCount} features returned`);
-        
         if (feat) {
           results.push({
             label: b.label,
             attributes: feat,
             summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
           });
-          audit.push({ layer: b.label, featuresReturned: featuresCount, cardCreated: true });
-        } else {
-          audit.push({ layer: b.label, featuresReturned: 0, cardCreated: false, reason: "No features" });
         }
         continue;
       }
@@ -588,13 +558,7 @@ export async function lookupCityOverlays(
           geometryType: "esriGeometryPoint",
           geometry: JSON.stringify(centroid102100),
         });
-        
-        const featuresCount = r?.features?.length ?? 0;
         const feat = r?.features?.[0]?.attributes;
-        
-        // FIX #25: Log what we got for each sublayer
-        console.log(`[OVERLAY_AUDIT] ${b.label}/${id}: ${featuresCount} features returned`);
-        
         if (feat) {
           results.push({
             label: b.label,
@@ -602,21 +566,12 @@ export async function lookupCityOverlays(
             attributes: feat,
             summary: summarizeOverlayAttrs(feat, b.nameFields, b.descFields),
           });
-          audit.push({ layer: b.label, sublayer: String(id), featuresReturned: featuresCount, cardCreated: true });
-        } else {
-          audit.push({ layer: b.label, sublayer: String(id), featuresReturned: 0, cardCreated: false, reason: "No features" });
         }
       }
     } catch (e) {
       console.log("[OVERLAYS] bundle error:", b.label, String(e));
-      audit.push({ layer: b.label, featuresReturned: 0, cardCreated: false, reason: `Error: ${String(e)}` });
     }
   }
-
-  // FIX #25: Log audit summary
-  const totalFeatures = audit.reduce((sum, a) => sum + a.featuresReturned, 0);
-  const cardsCreated = audit.filter(a => a.cardCreated).length;
-  console.log(`[OVERLAY_AUDIT] Summary: ${totalFeatures} total features, ${cardsCreated} cards created from ${audit.length} layer queries`);
 
   // ─────────────────────────────────────────────
   // Dedupe overlays so "SUD: Downtown" only shows once
@@ -635,9 +590,6 @@ export async function lookupCityOverlays(
   }
 
   const dedupedHits = Array.from(dedupMap.values());
-  
-  // FIX #25: Log dedup results
-  console.log(`[OVERLAY_AUDIT] After dedup: ${dedupedHits.length} unique hits`);
 
   // Map to OverlayCard with sanitized attributes
   const mapped = dedupedHits.map((hit): OverlayCard | null => {
@@ -660,7 +612,6 @@ export async function lookupCityOverlays(
       )
     ) {
       // No real overlay info, just base zone -> don't create a card
-      console.log(`[OVERLAY_AUDIT] Skipping ${label}: No overlay info, just base zone`);
       return null;
     }
 
@@ -722,17 +673,12 @@ export async function lookupCityOverlays(
       };
     }
 
-    // FIX #20: Wildfire Evacuation Zones - ensure proper handling
-    if (lowerLabel.includes("wildfire evacuation") || lowerLabel.includes("evacuation zone")) {
-      const zoneValue = rawFeat.ZONE || rawFeat.EVAC_ZONE || rawFeat.NAME || summary;
-      const zoneName = zoneValue ? `Wildfire Evacuation Zone: ${zoneValue}` : "Wildfire Evacuation Zone";
-      
-      console.log(`[OVERLAY_AUDIT] Creating evacuation zone card: ${zoneName}`);
-      
+    // Wildfire Evacuation Zones
+    if (lowerLabel.includes("wildfire evacuation")) {
       return {
         ...base,
         program: "Other",
-        name: zoneName,
+        name: `Wildfire Evacuation Zone: ${rawFeat.ZONE || summary || "Yes"}`,
         details: rawFeat.DESCRIPTIO || undefined,
       };
     }
@@ -744,40 +690,6 @@ export async function lookupCityOverlays(
         program: "Other",
         name: rawFeat.STATUS || "Hillside Management Area",
         details: summary,
-      };
-    }
-
-    // FIX #23: Sign Districts
-    if (lowerLabel.includes("sign district")) {
-      const signDistName = rawFeat.SIGN_DIST || rawFeat.NAME || rawFeat.TITLE || summary || "Sign District";
-      
-      console.log(`[OVERLAY_AUDIT] Creating sign district card: ${signDistName}`);
-      
-      return {
-        ...base,
-        program: "Other",
-        name: `Sign District: ${signDistName}`,
-        details: rawFeat.DESCRIPTIO || undefined,
-      };
-    }
-
-    // FIX #24: Historic Cultural Monuments (LA City)
-    if (lowerLabel.includes("historic cultural monument") || lowerLabel.includes("hcm")) {
-      const hcmName = rawFeat.HCM_NAME || rawFeat.NAME || rawFeat.TITLE || summary;
-      const hcmNumber = rawFeat.HCM_NUMBER || rawFeat.MONUMENT_NUMBER;
-      
-      let name = hcmName ? `Historic Cultural Monument: ${hcmName}` : "Historic Cultural Monument";
-      if (hcmNumber) {
-        name = `Historic Cultural Monument #${hcmNumber}: ${hcmName || "Designated"}`;
-      }
-      
-      console.log(`[OVERLAY_AUDIT] Creating HCM card: ${name}`);
-      
-      return {
-        ...base,
-        program: "HPOZ", // Categorize with historic preservation
-        name,
-        details: rawFeat.MONUMENT_TYP || rawFeat.DESCRIPTIO || undefined,
       };
     }
 
@@ -889,16 +801,39 @@ export async function lookupCityOverlays(
       };
     }
 
-    // FIX #22: Specific Plan Areas - ensure proper handling
+    // Specific Plan Areas
     if (lowerLabel.includes("specific plan")) {
-      const planName = rawFeat.SPEC_PLAN ?? rawFeat.PLAN_NAME ?? rawFeat.NAME ?? rawFeat.TITLE ?? summary;
+      // Try multiple field name variations (LA City uses different field names)
+      const planName = 
+        rawFeat.SPEC_PLAN ?? 
+        rawFeat.PLAN_NAME ?? 
+        rawFeat.NAME ?? 
+        rawFeat.TITLE ??
+        rawFeat.SpecPlan ??
+        rawFeat.PlanName ??
+        rawFeat.SP_NAME ??
+        rawFeat.SPECIFICPLAN ??
+        summary ??  // Use the computed summary as fallback
+        null;
       
-      console.log(`[OVERLAY_AUDIT] Creating specific plan card: ${planName || 'Unknown'}`);
+      // Debug logging to see what fields are available
+      console.log("[OVERLAY_AUDIT] Specific Plan raw fields:", Object.keys(rawFeat).join(", "));
+      console.log("[OVERLAY_AUDIT] Specific Plan field values:", {
+        SPEC_PLAN: rawFeat.SPEC_PLAN,
+        PLAN_NAME: rawFeat.PLAN_NAME,
+        NAME: rawFeat.NAME,
+        TITLE: rawFeat.TITLE,
+        summary,
+      });
+      
+      const displayName = planName 
+        ? `Specific Plan: ${planName}`
+        : "Specific Plan Area";
       
       return {
         ...base,
         program: "Other",
-        name: planName ? `Specific Plan: ${planName}` : "Specific Plan Area",
+        name: displayName,
         details: rawFeat.DESCRIPTIO ?? rawFeat.PLAN_TYPE ?? rawFeat.PLAN_AREA ?? undefined,
       };
     }
@@ -914,11 +849,8 @@ export async function lookupCityOverlays(
   const overlays: OverlayCard[] = mapped.filter(
     (card): card is OverlayCard => card !== null
   );
-  
-  // FIX #25: Log final card count
-  console.log(`[OVERLAY_AUDIT] Final overlays array: ${overlays.length} cards`);
 
-  return { overlays, audit };
+  return { overlays };
 }
 
 
@@ -1078,16 +1010,7 @@ export async function lookupOverlays(
 
   const results: OverlayCard[] = [];
 
-  // FIX #21: Add flood zone query if endpoint is configured
-  const floodEndpoint = process.env.FLOOD_100YR_QUERY;
-  const allEndpoints = [...endpoints.overlayQueries];
-  
-  // Make sure flood endpoint is included if configured
-  if (floodEndpoint && !allEndpoints.includes(floodEndpoint)) {
-    allEndpoints.push(floodEndpoint);
-  }
-
-  for (const url of allEndpoints) {
+  for (const url of endpoints.overlayQueries) {
     let attrs: Record<string, any> | null = null;
 
     try {
@@ -1099,9 +1022,6 @@ export async function lookupOverlays(
           geometryType: "esriGeometryPoint",
         });
         attrs = r1.features?.[0]?.attributes ?? null;
-        
-        // FIX #25: Log what we got
-        console.log(`[OVERLAY_AUDIT] County ${url.split('/').pop()}: ${r1.features?.length ?? 0} features`);
       }
 
       // fallback: ENVELOPE (if point fails or returns nothing)
@@ -1112,11 +1032,6 @@ export async function lookupOverlays(
           geometryType: "esriGeometryEnvelope",
         });
         attrs = r2.features?.[0]?.attributes ?? null;
-        
-        // FIX #25: Log fallback result
-        if (attrs) {
-          console.log(`[OVERLAY_AUDIT] County ${url.split('/').pop()}: envelope fallback succeeded`);
-        }
       }
 
       if (!attrs) continue;
@@ -1169,23 +1084,8 @@ export async function lookupOverlays(
         details = attrs.IMPLEMENTATION ?? attrs.SEA_TYPE ?? undefined;
         program = "Other";
       } else if (attrs.FLOOD_ZONE || attrs.FLD_ZONE) {
-        // FIX #21: Handle flood zone data
-        const floodZone = attrs.FLOOD_ZONE || attrs.FLD_ZONE;
-        name = `FEMA Flood Zone ${floodZone}`;
-        
-        // SFHA_TF indicates if it's a Special Flood Hazard Area
-        if (attrs.SFHA_TF === 'T' || attrs.SFHA_TF === true) {
-          details = "Special Flood Hazard Area - Flood insurance required";
-        } else if (floodZone === 'X' || floodZone === 'X500') {
-          details = "Minimal flood hazard";
-        } else if (floodZone === 'A' || floodZone === 'AE' || floodZone === 'AH' || floodZone === 'AO') {
-          details = "High-risk flood area - Flood insurance required";
-        } else if (attrs.ZONE_SUBTY) {
-          details = attrs.ZONE_SUBTY;
-        }
-        
+        name = `Flood Zone: ${attrs.FLOOD_ZONE || attrs.FLD_ZONE}`;
         program = "Other";
-        console.log(`[OVERLAY_AUDIT] Created flood zone card: ${name}`);
       }
 
       results.push({
@@ -1208,9 +1108,6 @@ export async function lookupOverlays(
       dedupMap.set(key, card);
     }
   }
-  
-  // FIX #25: Log final count
-  console.log(`[OVERLAY_AUDIT] County overlays: ${dedupMap.size} unique cards from ${results.length} results`);
 
   return {
     input: { apn },
