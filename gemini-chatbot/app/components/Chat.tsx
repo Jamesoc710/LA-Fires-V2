@@ -215,16 +215,41 @@ function parseAssistantText(text: string): ParsedReply | null {
 
   const parsed: ParsedReply = { raw: text };
 
-  // FIX #9: Detect parcel not found error
-  if (
-    text.toLowerCase().includes('parcel') &&
-    (text.toLowerCase().includes('not found') || text.toLowerCase().includes('no parcel'))
-  ) {
+  // FIX #9: Detect parcel not found or retrieval errors
+  const lowerText = text.toLowerCase();
+  
+  // Check for various error patterns
+  const isParcelError = (
+    // Direct "not found" patterns
+    (lowerText.includes('parcel') && lowerText.includes('not found')) ||
+    (lowerText.includes('no parcel found')) ||
+    // APN verification errors
+    (lowerText.includes('apn') && lowerText.includes('verify')) ||
+    (lowerText.includes('apn') && lowerText.includes('correct')) ||
+    // All three sections showing "could not retrieve" = likely bad APN
+    (
+      lowerText.includes('zoning') && 
+      lowerText.includes('overlays') && 
+      lowerText.includes('assessor') &&
+      (text.match(/could not retrieve/gi) || []).length >= 3
+    ) ||
+    // All three sections showing errors
+    (
+      lowerText.includes('zoning') && 
+      lowerText.includes('overlays') && 
+      lowerText.includes('assessor') &&
+      (text.match(/please try again/gi) || []).length >= 3
+    )
+  );
+  
+  if (isParcelError) {
     parsed.isParcelNotFound = true;
-    // Try to extract the error message
-    const errorMatch = text.match(/(?:parcel.*?not found|no parcel found)[^.]*\./i);
+    // Try to extract a specific error message
+    const errorMatch = text.match(/(?:parcel.*?not found|no parcel found|could not retrieve data)[^.]*\./i);
     if (errorMatch) {
       parsed.errorMessage = errorMatch[0];
+    } else {
+      parsed.errorMessage = "Could not retrieve data for this APN. Please verify the number is correct.";
     }
   }
 
@@ -450,7 +475,7 @@ function GroupedOverlaysCard({
   );
 }
 
-// FIX #9: Error card for invalid APN
+// FIX #9: Error card for invalid APN or data retrieval failures
 function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }) {
   return (
     <div className="rounded-2xl bg-orange-50 dark:bg-orange-900/30 text-orange-900 dark:text-orange-100 ring-1 ring-orange-200 dark:ring-orange-700 p-4">
@@ -461,27 +486,34 @@ function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }
           </svg>
         </div>
         <div>
-          <h3 className="text-base font-semibold mb-1">Parcel Not Found</h3>
+          <h3 className="text-base font-semibold mb-1">Could Not Retrieve Parcel Data</h3>
           <p className="text-sm mb-2">
-            {message || `No parcel found for ${apn ? `APN ${apn}` : 'the provided number'} in LA County records.`}
+            {message || `Unable to find data for ${apn ? `APN ${apn}` : 'the provided number'} in LA County records.`}
           </p>
           <div className="text-sm space-y-1">
-            <p className="font-medium">Please check:</p>
+            <p className="font-medium">Please verify:</p>
             <ul className="list-disc list-inside ml-2 space-y-0.5">
               <li>APNs are 10 digits (e.g., 5843-004-015)</li>
               <li>The number matches your property tax bill</li>
-              <li>The parcel is in LA County</li>
+              <li>The parcel is located in LA County</li>
             </ul>
           </div>
-          <div className="mt-3">
+          <div className="mt-3 flex gap-3">
             <a
               href="https://portal.assessor.lacounty.gov/"
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center text-sm font-medium text-orange-700 dark:text-orange-300 hover:underline"
             >
-              Look up your APN on the Assessor Portal ↗
+              Look up your APN ↗
             </a>
+            <span className="text-orange-400">|</span>
+            <button
+              onClick={() => window.location.reload()}
+              className="inline-flex items-center text-sm font-medium text-orange-700 dark:text-orange-300 hover:underline"
+            >
+              Try again
+            </button>
           </div>
         </div>
       </div>
