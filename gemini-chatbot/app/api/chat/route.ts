@@ -740,7 +740,7 @@ export async function POST(request: NextRequest) {
                     if (aRes.value.ain || aRes.value.situs || aRes.value.use) {
                       assessorStatus = "success";
                       // FIX #19: Rename "city" to "area" for unincorporated parcels
-                      const assessorData = { ...aRes.value };
+                      const assessorData: Record<string, any> = { ...aRes.value };
                       if (communityName && assessorData.city) {
                         // Add a clearer label - the city field becomes area/community
                         assessorData.area = assessorData.city;
