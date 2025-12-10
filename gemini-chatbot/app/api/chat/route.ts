@@ -75,14 +75,29 @@ type OverlayCategory =
   | "Land Use & Planning"
   | "Other";
 
+// Items to filter out entirely (noise, not useful)
+const NOISE_ITEMS = [
+  "county overlay",
+  "city overlay",
+  "overlay",
+];
+
+function isNoiseItem(name: string, details?: string): boolean {
+  const combined = `${name} ${details || ""}`.toLowerCase().trim();
+  return NOISE_ITEMS.some(noise => combined === noise || name.toLowerCase().trim() === noise);
+}
+
 function categorizeOverlay(card: OverlayCard): OverlayCategory {
   const name = (card.name || "").toLowerCase();
   const details = (card.details || "").toLowerCase();
   const combined = `${name} ${details}`;
   
-  // Hazards - critical for rebuild
+  // Hazards - critical for rebuild (including SEA)
   if (
     card.program === "SEA" ||
+    combined.includes("sea:") ||
+    combined.includes("sea ordinance") ||
+    combined.includes("significant ecological") ||
     combined.includes("fire") ||
     combined.includes("hazard") ||
     combined.includes("hillside") ||
@@ -90,9 +105,7 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     combined.includes("evacuation") ||
     combined.includes("landslide") ||
     combined.includes("fault") ||
-    combined.includes("liquefaction") ||
-    combined.includes("sea_") ||
-    combined.includes("significant ecological")
+    combined.includes("liquefaction")
   ) {
     return "Hazards";
   }
@@ -118,16 +131,7 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Supplemental Use Districts";
   }
   
-  // Community Standards Districts (County)
-  if (
-    card.program === "CSD" ||
-    combined.includes("csd") ||
-    combined.includes("community standards")
-  ) {
-    return "Other"; // Group CSDs under Other for now, or create a new category
-  }
-  
-  // Land Use & Planning
+  // Land Use & Planning (expanded to catch density designations)
   if (
     combined.includes("general plan") ||
     combined.includes("specific plan") ||
@@ -136,10 +140,20 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     combined.includes("gplu") ||
     combined.includes("land use") ||
     combined.includes("cpa") ||
-    combined.includes("redevelopment")
+    combined.includes("redevelopment") ||
+    combined.includes("density residential") ||
+    combined.includes("low density") ||
+    combined.includes("medium density") ||
+    combined.includes("high density") ||
+    combined.includes("residential —") ||
+    combined.includes("commercial —") ||
+    combined.includes("industrial —")
   ) {
     return "Land Use & Planning";
   }
+  
+  // Community Standards Districts stay in Other for now
+  // (could create separate category later)
   
   return "Other";
 }
@@ -162,6 +176,10 @@ function formatGroupedOverlays(
   };
 
   for (const card of overlays) {
+    // Skip noise items
+    if (isNoiseItem(card.name, card.details)) {
+      continue;
+    }
     const category = categorizeOverlay(card);
     groups[category].push(card);
   }
@@ -186,6 +204,9 @@ function formatGroupedOverlays(
     lines.push(""); // blank line before category
     lines.push(`${category.toUpperCase()}:`);
 
+    // Dedupe items within category by normalized text
+    const seen = new Set<string>();
+    
     for (const card of items) {
       // Format: "• Name — Details" or just "• Name"
       let itemLine = `  • ${card.name}`;
@@ -196,6 +217,14 @@ function formatGroupedOverlays(
           itemLine += ` — ${card.details}`;
         }
       }
+      
+      // Dedupe: normalize and check if we've seen this
+      const normalized = itemLine.toLowerCase().replace(/\s+/g, " ").trim();
+      if (seen.has(normalized)) {
+        continue; // Skip duplicate
+      }
+      seen.add(normalized);
+      
       lines.push(itemLine);
     }
   }
