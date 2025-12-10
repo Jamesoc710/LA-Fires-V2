@@ -101,3 +101,51 @@ export const znetViewerUrl = ENDPOINTS.ZNET_VIEWER;
 export const gisnetViewerUrl = ENDPOINTS.GISNET_VIEWER;
 export const assessorParcelUrl = (ain: string) =>
   `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`;
+
+// FIX #5: City-specific viewer URLs
+export const zimasViewerUrl = "https://zimas.lacity.org/";
+export const pasadenaZoningViewerUrl = "https://cityofpasadena.net/planning/zoning/";
+
+/**
+ * Get the appropriate viewer URL based on jurisdiction.
+ * Returns null if no specific viewer applies.
+ */
+export function getViewerUrlForJurisdiction(jurisdiction: string | undefined | null): {
+  name: string;
+  url: string;
+} | null {
+  if (!jurisdiction) return null;
+  
+  const j = jurisdiction.toLowerCase();
+  
+  // City of Los Angeles
+  if (j === "los angeles" || j === "city of los angeles" || j === "la") {
+    return { name: "ZIMAS", url: zimasViewerUrl };
+  }
+  
+  // Pasadena
+  if (j === "pasadena" || j === "city of pasadena") {
+    return { name: "Pasadena Zoning", url: pasadenaZoningViewerUrl };
+  }
+  
+  // Unincorporated LA County - no specific link, use ZNET/GISNET
+  return null;
+}
+
+/**
+ * Determine if ZNET/GISNET links should be shown for a jurisdiction.
+ * These are only relevant for unincorporated LA County areas.
+ */
+export function shouldShowCountyViewers(jurisdiction: string | undefined | null): boolean {
+  if (!jurisdiction) return true; // default to showing if unknown
+  
+  const j = jurisdiction.toLowerCase();
+  
+  // Show county viewers only for unincorporated areas
+  return (
+    j.includes("unincorporated") ||
+    j === "la county" ||
+    j === "los angeles county" ||
+    j === "unknown"
+  );
+}
