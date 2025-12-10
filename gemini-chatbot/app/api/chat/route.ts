@@ -162,10 +162,9 @@ function formatGroupedOverlays(
   overlays: OverlayCard[],
   jurisdiction: string
 ): string {
-  if (!overlays || overlays.length === 0) {
-    return "";
-  }
-
+  // Handle null/undefined overlays array
+  const safeOverlays = overlays || [];
+  
   // Group overlays by category
   const groups: Record<OverlayCategory, OverlayCard[]> = {
     "Hazards": [],
@@ -175,7 +174,7 @@ function formatGroupedOverlays(
     "Other": [],
   };
 
-  for (const card of overlays) {
+  for (const card of safeOverlays) {
     // Skip noise items
     if (isNoiseItem(card.name, card.details)) {
       continue;
@@ -197,12 +196,28 @@ function formatGroupedOverlays(
     "Other",
   ];
 
+  // FIX #10: Key categories that should always appear, even if empty
+  const keyCategories: OverlayCategory[] = [
+    "Hazards",
+    "Historic Preservation",
+    "Land Use & Planning",
+  ];
+
   for (const category of categoryOrder) {
     const items = groups[category];
-    if (items.length === 0) continue;
+    const isKeyCategory = keyCategories.includes(category);
+    
+    // FIX #10: Show key categories even if empty, skip non-key empty categories
+    if (items.length === 0 && !isKeyCategory) continue;
 
     lines.push(""); // blank line before category
     lines.push(`${category.toUpperCase()}:`);
+
+    // FIX #10: Show "None found" for empty key categories
+    if (items.length === 0) {
+      lines.push(`  • None found for this parcel`);
+      continue;
+    }
 
     // Dedupe items within category by normalized text
     const seen = new Set<string>();
@@ -728,6 +743,19 @@ CRITICAL - OVERLAYS SECTION
 - Do not reformat, reorganize, or summarize the formatted overlays.
 - The formatted text already includes JURISDICTION, category headings, and bullet points.
 - Just copy the "formatted" field content directly after the "Overlays" heading.
+
+FIX #10 - EMPTY OVERLAY CATEGORIES
+When showing overlays, ALWAYS include these three key categories even if they have no items:
+- HAZARDS
+- HISTORIC PRESERVATION
+- LAND USE & PLANNING
+
+If a category has no results, show it with "None found for this parcel" like this:
+
+HAZARDS:
+  • None found for this parcel
+
+This helps users understand that the data was checked, not missing.
 
 FORMAT
 - Structure your answer into up to three sections, in this order:
