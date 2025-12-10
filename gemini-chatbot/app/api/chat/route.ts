@@ -68,12 +68,16 @@ interface OverlayCard {
   attributes?: Record<string, any>;
 }
 
+// FIX #11, #12, #13: Expanded category types
 type OverlayCategory = 
   | "Hazards"
+  | "Environmental Protection"      // FIX #11: SEA moved here
+  | "Development Regulations"       // FIX #12: HMA moved here
   | "Historic Preservation"
   | "Supplemental Use Districts"
+  | "Community Standards"           // FIX #13: CSD category
   | "Land Use & Planning"
-  | "Other";
+  | "Additional Overlays";          // FIX #13: Renamed from "Other"
 
 // Items to filter out entirely (noise, not useful)
 const NOISE_ITEMS = [
@@ -87,25 +91,99 @@ function isNoiseItem(name: string, details?: string): boolean {
   return NOISE_ITEMS.some(noise => combined === noise || name.toLowerCase().trim() === noise);
 }
 
+// FIX #15: Helper to clean redundant descriptions
+function cleanRedundantDescription(name: string, details: string | undefined): string {
+  if (!details) return '';
+  
+  const nameLower = name.toLowerCase();
+  const detailsLower = details.toLowerCase();
+  
+  // If details just restates the name in different words, skip it
+  const redundantPatterns = [
+    'parcel is inside the',
+    'parcel is within the',
+    'parcel is in the',
+    'located in',
+    'located within',
+    'falls within',
+    'is in the',
+    'is inside the',
+  ];
+  
+  for (const pattern of redundantPatterns) {
+    // Check if description contains pattern AND references the zone name
+    if (detailsLower.includes(pattern)) {
+      // Extract first significant word from name (e.g., "fire" from "Fire Hazard Zone")
+      const nameWords = nameLower.split(/\s+/).filter(w => w.length > 3);
+      for (const word of nameWords) {
+        if (detailsLower.includes(word)) {
+          // The description is just restating that the parcel is in this zone
+          return '';
+        }
+      }
+    }
+  }
+  
+  return details;
+}
+
+// FIX #14: Helper to escape regex special characters
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function categorizeOverlay(card: OverlayCard): OverlayCategory {
   const name = (card.name || "").toLowerCase();
   const details = (card.details || "").toLowerCase();
   const combined = `${name} ${details}`;
   
-  // Hazards - critical for rebuild (including SEA)
+  // FIX #11: Environmental Protection - check FIRST before Hazards
+  // SEA (Significant Ecological Area) is environmental protection, not a hazard
   if (
     card.program === "SEA" ||
     combined.includes("sea:") ||
     combined.includes("sea ordinance") ||
-    combined.includes("significant ecological") ||
+    combined.includes("significant ecological")
+  ) {
+    return "Environmental Protection";
+  }
+  
+  // FIX #12: Development Regulations - slope/grading/design requirements
+  // These are development constraints, not hazards
+  if (
+    combined.includes("hillside management") ||
+    combined.includes("hillside area") ||
+    (combined.includes("hma") && !combined.includes("hazard")) ||
+    combined.includes("ridgeline") ||
+    combined.includes("grading") ||
+    (combined.includes("slope") && !combined.includes("landslide"))
+  ) {
+    return "Development Regulations";
+  }
+  
+  // FIX #13: Community Standards Districts
+  if (
+    card.program === "CSD" ||
+    combined.includes("csd") ||
+    combined.includes("community standards") ||
+    combined.includes("community standard district")
+  ) {
+    return "Community Standards";
+  }
+  
+  // Hazards - critical for rebuild safety
+  // Note: "hillside" alone no longer triggers Hazards (moved to Dev Regulations)
+  // But "landslide" IS a hazard
+  if (
     combined.includes("fire") ||
     combined.includes("hazard") ||
-    combined.includes("hillside") ||
     combined.includes("flood") ||
     combined.includes("evacuation") ||
     combined.includes("landslide") ||
     combined.includes("fault") ||
-    combined.includes("liquefaction")
+    combined.includes("liquefaction") ||
+    combined.includes("tsunami") ||
+    combined.includes("seismic")
   ) {
     return "Hazards";
   }
@@ -152,10 +230,8 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Land Use & Planning";
   }
   
-  // Community Standards Districts stay in Other for now
-  // (could create separate category later)
-  
-  return "Other";
+  // FIX #13: Default to "Additional Overlays" instead of vague "Other"
+  return "Additional Overlays";
 }
 
 function formatGroupedOverlays(
@@ -165,13 +241,16 @@ function formatGroupedOverlays(
   // Handle null/undefined overlays array
   const safeOverlays = overlays || [];
   
-  // Group overlays by category
+  // FIX #11, #12, #13: Updated groups with new categories
   const groups: Record<OverlayCategory, OverlayCard[]> = {
     "Hazards": [],
+    "Environmental Protection": [],
+    "Development Regulations": [],
     "Historic Preservation": [],
     "Supplemental Use Districts": [],
+    "Community Standards": [],
     "Land Use & Planning": [],
-    "Other": [],
+    "Additional Overlays": [],
   };
 
   for (const card of safeOverlays) {
@@ -187,13 +266,16 @@ function formatGroupedOverlays(
   const lines: string[] = [];
   lines.push(`JURISDICTION: ${jurisdiction}`);
 
-  // Define category order (most important first)
+  // FIX #11, #12, #13: Updated category order (most important first)
   const categoryOrder: OverlayCategory[] = [
     "Hazards",
+    "Environmental Protection",
+    "Development Regulations",
     "Historic Preservation",
     "Supplemental Use Districts",
     "Land Use & Planning",
-    "Other",
+    "Community Standards",
+    "Additional Overlays",
   ];
 
   // FIX #10: Key categories that should always appear, even if empty
@@ -223,13 +305,31 @@ function formatGroupedOverlays(
     const seen = new Set<string>();
     
     for (const card of items) {
-      // Format: "• Name — Details" or just "• Name"
+      // FIX #14: Enhanced deduplication for "Low Residential — Low Residential" issue
       let itemLine = `  • ${card.name}`;
+      
       if (card.details && card.details !== card.name) {
-        // Avoid repeating name in details
-        const detailsClean = card.details.replace(new RegExp(card.name, "gi"), "").trim();
-        if (detailsClean && detailsClean !== "—" && detailsClean.length > 2) {
-          itemLine += ` — ${card.details}`;
+        // FIX #15: Clean redundant descriptions first
+        let detailsClean = cleanRedundantDescription(card.name, card.details);
+        
+        if (detailsClean) {
+          // FIX #14: Remove the name if it appears at the start of details
+          const namePattern = new RegExp(`^${escapeRegex(card.name)}\\s*[-—]?\\s*`, 'i');
+          detailsClean = detailsClean.replace(namePattern, '').trim();
+          
+          // Also remove if name appears anywhere in details (case-insensitive)
+          detailsClean = detailsClean.replace(new RegExp(escapeRegex(card.name), "gi"), "").trim();
+          
+          // Clean up any resulting double dashes or leading dashes
+          detailsClean = detailsClean
+            .replace(/^[-—]\s*/, '')
+            .replace(/\s*[-—]\s*[-—]\s*/g, ' — ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          
+          if (detailsClean && detailsClean !== "—" && detailsClean.length > 2) {
+            itemLine += ` — ${detailsClean}`;
+          }
         }
       }
       
@@ -365,6 +465,9 @@ export async function POST(request: NextRequest) {
     // Track jurisdiction for consistent output
     let detectedJurisdiction: string | null = null;
     let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
+    
+    // FIX #19: Track community name for unincorporated areas
+    let communityName: string | null = null;
     
     // Track status for each section to provide clear messaging
     type SectionStatus = "success" | "no_data" | "error" | "not_configured" | "not_implemented";
@@ -568,6 +671,8 @@ export async function POST(request: NextRequest) {
               } else {
                 // --- COUNTY / UNINCORPORATED FLOW ---
                 
+                // FIX #19: For unincorporated areas, we'll get community name from assessor
+                // and update jurisdiction string to be more informative
                 if (!detectedJurisdiction || detectedJurisdiction === "Unknown") {
                   detectedJurisdiction = "Unincorporated LA County";
                 }
@@ -577,6 +682,25 @@ export async function POST(request: NextRequest) {
                   SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
                   SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
                 ]);
+
+                // FIX #19: Extract community name from assessor result if available
+                if (aRes.status === "fulfilled" && aRes.value?.city) {
+                  const assessorCity = aRes.value.city;
+                  // Only use if it's a real community name, not just "UNINCORPORATED"
+                  if (assessorCity && 
+                      assessorCity !== 'UNINCORPORATED' && 
+                      assessorCity !== 'UNINCORPORATED LA' &&
+                      !assessorCity.toLowerCase().includes('unincorporated')) {
+                    communityName = assessorCity;
+                    // Update jurisdiction to include community name
+                    const titleCaseCommunity = communityName
+                      .split(' ')
+                      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                      .join(' ')
+                      .replace(/ Ca$/i, '');
+                    detectedJurisdiction = `Unincorporated LA County (${titleCaseCommunity})`;
+                  }
+                }
 
                 // Handle zoning result
                 if (SHOW_ZONING) {
@@ -615,9 +739,16 @@ export async function POST(request: NextRequest) {
                   if (aRes.status === "fulfilled" && aRes.value) {
                     if (aRes.value.ain || aRes.value.situs || aRes.value.use) {
                       assessorStatus = "success";
+                      // FIX #19: Rename "city" to "area" for unincorporated parcels
+                      const assessorData = { ...aRes.value };
+                      if (communityName && assessorData.city) {
+                        // Add a clearer label - the city field becomes area/community
+                        assessorData.area = assessorData.city;
+                        delete assessorData.city;
+                      }
                       toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                         status: "success",
-                        ...aRes.value
+                        ...assessorData
                       }, null, 2)}`;
                     } else {
                       assessorStatus = "no_data";
@@ -722,7 +853,7 @@ RULES
 - Prefer human-friendly fields such as: jurisdiction, zone, category, community plan,
   plan designation, program, name, description, SEA_NAME, HAZ_CLASS, CSD_NAME, etc.
 - Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
-  internal IDs, URLs, or status fields.
+  internal IDs, URLs, status fields, or TITLE22 codes.
 - Do not mention tools, JSON, or APIs in the final answer.
 
 HANDLING SECTION STATUS
@@ -735,7 +866,7 @@ Check the [SECTION_STATUS] block for each section's status:
 
 IMPORTANT - JURISDICTION
 - The Zoning section MUST always include JURISDICTION as the first field.
-- Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County").
+- Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County (Altadena)").
 - This tells the user which city or county rules apply to their parcel.
 
 CRITICAL - OVERLAYS SECTION
@@ -756,6 +887,14 @@ HAZARDS:
   • None found for this parcel
 
 This helps users understand that the data was checked, not missing.
+
+FIX #16 - TITLE22 CODES
+Do NOT display raw TITLE22 codes like "DIV3ZO_CH22.18REZ0" - these are meaningless to users.
+Simply omit the TITLE22 field entirely from the output.
+
+FIX #19 - ASSESSOR AREA FIELD
+For unincorporated parcels, use "AREA" instead of "CITY" when displaying the community name.
+The tool output may include an "area" field instead of "city" for these parcels.
 
 FORMAT
 - Structure your answer into up to three sections, in this order:
@@ -830,6 +969,10 @@ const combinedPrompt = [
             }
             // Also filter out status fields that might leak through
             if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) {
+              return false;
+            }
+            // FIX #16: Filter out TITLE22 codes
+            if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) {
               return false;
             }
             return true;
