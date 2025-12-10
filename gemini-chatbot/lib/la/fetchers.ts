@@ -1018,9 +1018,9 @@ export async function lookupAssessor(id: string) {
   let r: any;
   try {
     r = await esriQuery(endpoints.assessorParcelQuery, {
-      returnGeometry: "false",
+      returnGeometry: "true", // FIX #6: Request geometry to compute area as fallback
       where,
-      outFields: "*",          // <-- safe
+      outFields: "*",
     });
   } catch (e) {
     console.log("[ASSESSOR] hard fail -> returning portal link:", String(e));
@@ -1030,10 +1030,14 @@ export async function lookupAssessor(id: string) {
     };
   }
 
-  const a = r?.features?.[0]?.attributes;
+  const feature = r?.features?.[0];
+  const a = feature?.attributes;
   if (!a) {
     return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
   }
+
+  // FIX #6: Log all available field names for debugging
+  console.log("[ASSESSOR] Available fields:", Object.keys(a).join(", "));
 
   // Safely read values if they exist on this layer
   const get = (k: string) => (k in a ? a[k] : null);
@@ -1058,8 +1062,39 @@ export async function lookupAssessor(id: string) {
     .filter(n => !Number.isNaN(n));
   const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
 
-  const lotSqft =
-    Number(get("LotArea")) || Number(get("LOT_AREA")) || Number(get("LOT_SQFT")) || null;
+  // FIX #6: Expanded field name search for lot size
+  // Try multiple possible field names for lot size/area
+  const lotSizeFieldNames = [
+    // Direct lot size fields
+    "LotArea", "LOT_AREA", "LOT_SQFT", "LotSqFt", "LOTSQFT",
+    "LandArea", "LAND_AREA", "LandSqFt", "LAND_SQFT",
+    "LotSize", "LOT_SIZE", "ParcelArea", "PARCEL_AREA",
+    "SqFtLand", "SQFT_LAND", "LotSquareFeet", "LOT_SQUARE_FEET",
+    // Shape area (typically in square meters for Web Mercator)
+    "Shape_Area", "SHAPE_AREA", "Shape__Area", "ShapeArea",
+  ];
+  
+  let lotSqft: number | null = null;
+  for (const fieldName of lotSizeFieldNames) {
+    const val = Number(get(fieldName));
+    if (val && val > 0) {
+      // Check if this is Shape_Area (typically in sq meters, needs conversion)
+      if (fieldName.toLowerCase().includes("shape")) {
+        // Convert square meters to square feet (1 sq m = 10.7639 sq ft)
+        // But only if the value seems reasonable (Web Mercator sq meters)
+        // Typical lot: 5000-20000 sq ft = ~465-1858 sq m
+        // If value > 10000, it's likely already in sq ft or an error
+        if (val < 100000) {
+          lotSqft = Math.round(val * 10.7639);
+          console.log(`[ASSESSOR] Using ${fieldName} (converted from sq m): ${lotSqft} sq ft`);
+        }
+      } else {
+        lotSqft = val;
+        console.log(`[ASSESSOR] Found lot size in ${fieldName}: ${lotSqft}`);
+      }
+      break;
+    }
+  }
 
   const units =
     ["Units1", "Units2", "Units3", "Units4"]
