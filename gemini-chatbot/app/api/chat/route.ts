@@ -693,11 +693,11 @@ export async function POST(request: NextRequest) {
                       !assessorCity.toLowerCase().includes('unincorporated')) {
                     communityName = assessorCity;
                     // Update jurisdiction to include community name
-                    const titleCaseCommunity = communityName
-                      .split(' ')
-                      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                      .join(' ')
-                      .replace(/ Ca$/i, '');
+                   const titleCaseCommunity = assessorCity  // Use assessorCity directly - already validated
+                    .split(' ')
+                    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                    .join(' ')
+                    .replace(/ Ca$/i, '');
                     detectedJurisdiction = `Unincorporated LA County (${titleCaseCommunity})`;
                   }
                 }
