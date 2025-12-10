@@ -695,7 +695,7 @@ export async function POST(request: NextRequest) {
                     // Update jurisdiction to include community name
                    const titleCaseCommunity = assessorCity  // Use assessorCity directly - already validated
                     .split(' ')
-                    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                    .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
                     .join(' ')
                     .replace(/ Ca$/i, '');
                     detectedJurisdiction = `Unincorporated LA County (${titleCaseCommunity})`;
