@@ -13,6 +13,8 @@ import {
   // FIX #5: Import new viewer URL helpers
   getViewerUrlForJurisdiction,
   shouldShowCountyViewers,
+  // FIX #41: Import formatters
+  formatAIN,
 } from '@/lib/la/endpoints';
 
 // Simple file download helper
@@ -114,16 +116,15 @@ function addKV(data: SectionData, k: string, v: string) {
 }
 
 // Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
-// FIX #11, #12, #13: Extended to recognize new category names (Environmental Protection, Development Regulations, Community Standards, Additional Overlays)
+// FIX #11, #12, #13: Extended to recognize new category names
 function isCategoryHeader(line: string): string | null {
   const trimmed = line.trim();
   // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "ENVIRONMENTAL PROTECTION:" etc.
-  // Must be all caps (or title case) and end with colon, no value after
   const match = trimmed.match(/^([A-Z][A-Z\s&]+):$/);
   if (match) {
     return match[1].trim();
   }
-  // Also match title case like "Land Use & Planning:", "Environmental Protection:", "Development Regulations:" etc.
+  // Also match title case like "Land Use & Planning:", "Environmental Protection:" etc.
   const titleMatch = trimmed.match(/^([A-Z][a-zA-Z\s&]+):$/);
   if (titleMatch && !trimmed.includes('—')) {
     return titleMatch[1].trim();
@@ -180,7 +181,6 @@ function parseGroupedOverlays(lines: string[], startIndex: number): { end: numbe
       continue;
     }
 
-    // If it's a regular KV line that's not jurisdiction, might be legacy format
     // Skip empty lines
     if (!trimmed) {
       i++;
@@ -313,14 +313,72 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+// FIX #35: Format field labels to be more readable
+function formatFieldLabel(key: string): string {
+  const labelMap: Record<string, string> = {
+    'YEARBUILT': 'YEAR BUILT',
+    'YEAR_BUILT': 'YEAR BUILT',
+    'LIVINGAREA': 'LIVING AREA',
+    'LIVING_AREA': 'LIVING AREA',
+    'LOTSQFT': 'LOT SIZE',
+    'LOT_SQFT': 'LOT SIZE',
+    'LOTSQUAREFEET': 'LOT SIZE',
+    'LOT_SQUARE_FEET': 'LOT SIZE',
+    'SQFTMAIN': 'LIVING AREA',
+    'SQFT_MAIN': 'LIVING AREA',
+    'BEDROOMS': 'BEDROOMS',
+    'BATHROOMS': 'BATHROOMS',
+    'ZONEDESCRIPTION': 'ZONE DESCRIPTION',
+    'ZONE_DESCRIPTION': 'ZONE DESCRIPTION',
+    'GENERALPLAN': 'GENERAL PLAN',
+    'GENERAL_PLAN': 'GENERAL PLAN',
+    'COMMUNITYAREA': 'COMMUNITY AREA',
+    'COMMUNITY_AREA': 'COMMUNITY AREA',
+    'PLANNINGAREA': 'PLANNING AREA',
+    'PLANNING_AREA': 'PLANNING AREA',
+  };
+  
+  return labelMap[key] || key.replace(/_/g, ' ');
+}
+
+// FIX #35: Format YEARBUILT with age calculation
+// FIX #36: Format ZIP codes consistently
 // FIX #7, #8: Format values with units for display
-function formatValueWithUnits(key: string, value: string): string {
+function formatFieldValue(key: string, value: string): string {
   const normalizedKey = key.toUpperCase().replace(/[_\s]/g, '');
   
-  // Skip formatting for certain values
-  if (!value || value === 'None' || value === 'N/A' || value === 'null' || value === '0') {
+  // Skip formatting for null/empty values
+  if (!value || value === 'None' || value === 'N/A' || value === 'null') {
     if (normalizedKey === 'LIVINGAREA' || normalizedKey === 'LOTSQFT' || normalizedKey === 'LOTSQUAREFEET') {
       return 'Not available';
+    }
+    return value;
+  }
+  
+  // FIX #35: Format YEARBUILT with age
+  if (normalizedKey === 'YEARBUILT') {
+    const year = parseInt(value.replace(/,/g, ''));
+    if (!isNaN(year) && year > 1800 && year < 2100) {
+      const age = new Date().getFullYear() - year;
+      return `${year} (${age} years old)`;
+    }
+    return value;
+  }
+  
+  // FIX #36: Format ZIP codes consistently (show ZIP+4 if available)
+  if (normalizedKey === 'ZIP' || normalizedKey === 'ZIPCODE') {
+    const cleaned = value.replace(/\s/g, '');
+    // Already ZIP+4 format
+    if (/^\d{5}-\d{4}$/.test(cleaned)) {
+      return cleaned;
+    }
+    // 9 digits without dash
+    if (/^\d{9}$/.test(cleaned)) {
+      return `${cleaned.slice(0, 5)}-${cleaned.slice(5)}`;
+    }
+    // Just 5 digits - return as-is
+    if (/^\d{5}$/.test(cleaned)) {
+      return cleaned;
     }
     return value;
   }
@@ -343,40 +401,68 @@ function formatValueWithUnits(key: string, value: string): string {
   
   return value;
 }
+// FIX #37: Data source mapping
+const DATA_SOURCES: Record<string, string> = {
+  'Zoning': 'LA County GIS / City GIS',
+  'Overlays': 'LA County GIS / City GIS',
+  'Assessor': 'LA County Assessor',
+};
 
+// FIX #40: Copy confirmation state type
+type CopiedSection = 'zoning' | 'overlays' | 'assessor' | 'all' | null;
+
+// FIX #37, #40: Updated SectionCard with source attribution and clearer copy button
 function SectionCard({
   title,
   data,
   onCopy,
+  copiedSection,
+  sectionKey,
 }: {
   title: string;
   data: SectionData;
   onCopy: () => void;
+  copiedSection?: CopiedSection;
+  sectionKey?: 'zoning' | 'overlays' | 'assessor';
 }) {
   const rows = Object.entries(data);
+  const isCopied = sectionKey && copiedSection === sectionKey;
+  const source = DATA_SOURCES[title];
 
   return (
     <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-base font-semibold">{title}</h3>
+        {/* FIX #37: Title with source attribution */}
+        <div>
+          <h3 className="text-base font-semibold">{title}</h3>
+          {source && (
+            <p className="text-xs text-slate-500 dark:text-slate-400">Source: {source}</p>
+          )}
+        </div>
+        {/* FIX #40: Clearer copy button with section name and confirmation */}
         <button
           type="button"
           onClick={onCopy}
-          className="text-xs px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-          aria-label={`Copy ${title}`}
-          title={`Copy ${title}`}
+          className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
+            isCopied 
+              ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
+              : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+          }`}
+          aria-label={`Copy ${title} section`}
+          title={`Copy ${title} section to clipboard`}
         >
-          Copy
+          {isCopied ? '✓ Copied!' : `Copy ${title}`}
         </button>
       </div>
       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
         {rows.map(([k, v]) => (
           <div key={k} className="flex">
+            {/* FIX #35: Use formatted labels */}
             <dt className="w-40 shrink-0 text-sm font-semibold text-slate-800 dark:text-slate-200">
-              {k.replace(/_/g, ' ')}:
+              {formatFieldLabel(k)}:
             </dt>
-            {/* FIX #7, #8: Apply unit formatting for assessor fields */}
-            <dd className="text-sm">{formatValueWithUnits(k, v)}</dd>
+            {/* FIX #35, #36, #7, #8: Use formatted values */}
+            <dd className="text-sm">{formatFieldValue(k, v)}</dd>
           </div>
         ))}
       </dl>
@@ -391,14 +477,18 @@ const KNOWN_OVERLAY_CATEGORIES = [
   'LAND USE & PLANNING',
 ];
 
-// Grouped Overlays Card Component with FIX #10
+// FIX #37, #40: Grouped Overlays Card Component with source and clearer copy
 function GroupedOverlaysCard({
   data,
   onCopy,
+  copiedSection,
 }: {
   data: GroupedOverlays;
   onCopy: () => void;
+  copiedSection?: CopiedSection;
 }) {
+  const isCopied = copiedSection === 'overlays';
+  
   // FIX #10: Ensure known categories always appear, even if empty
   const existingCategoryNames = new Set(data.categories.map(c => c.name.toUpperCase()));
   const categoriesWithPlaceholders: OverlayCategory[] = [...data.categories];
@@ -426,15 +516,24 @@ function GroupedOverlaysCard({
   return (
     <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-base font-semibold">Overlays</h3>
+        {/* FIX #37: Title with source attribution */}
+        <div>
+          <h3 className="text-base font-semibold">Overlays</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Source: {DATA_SOURCES['Overlays']}</p>
+        </div>
+        {/* FIX #40: Clearer copy button with confirmation */}
         <button
           type="button"
           onClick={onCopy}
-          className="text-xs px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-          aria-label="Copy Overlays"
-          title="Copy Overlays"
+          className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
+            isCopied 
+              ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
+              : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+          }`}
+          aria-label="Copy Overlays section"
+          title="Copy Overlays section to clipboard"
         >
-          Copy
+          {isCopied ? '✓ Copied!' : 'Copy Overlays'}
         </button>
       </div>
       
@@ -521,7 +620,6 @@ function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }
     </div>
   );
 }
-
 /* ----------------------------- Chat component ---------------------------- */
 
 export default function Chat() {
@@ -564,6 +662,8 @@ function clearChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRawForIndex, setShowRawForIndex] = useState<number | null>(null);
+  // FIX #40: Track which section was just copied for visual feedback
+  const [copiedSection, setCopiedSection] = useState<CopiedSection>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
@@ -580,6 +680,13 @@ function clearChat() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // FIX #40: Copy handler with visual feedback
+  const handleCopy = (section: CopiedSection, text: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopiedSection(section);
+    setTimeout(() => setCopiedSection(null), 2000);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -603,9 +710,11 @@ function clearChat() {
       }
 
       const data = await response.json();
+      // FIX #38: Capture metadata from response
       const assistantMessage: Message = {
         role: 'assistant',
         content: data.response || 'Sorry, I could not generate a response.',
+        metadata: data.metadata,
       };
       setMessages(prev => [...prev, assistantMessage]);
     } catch (err) {
@@ -638,7 +747,7 @@ function clearChat() {
     return lines.join('\n');
   }
 
-  function AssistantBubble({ text, index }: { text: string; index: number }) {
+  function AssistantBubble({ text, index, metadata }: { text: string; index: number; metadata?: Message['metadata'] }) {
     const parsed = useMemo(() => parseAssistantText(text), [text]);
     const showRaw = showRawForIndex === index;
 
@@ -652,8 +761,12 @@ function clearChat() {
       if (parsed?.groupedOverlays?.jurisdiction) {
         return parsed.groupedOverlays.jurisdiction;
       }
+      // FIX #38: Try from metadata
+      if (metadata?.jurisdiction) {
+        return metadata.jurisdiction;
+      }
       return null;
-    }, [parsed]);
+    }, [parsed, metadata]);
 
     // FIX #4, #5: Determine which viewer links to show
     const showCountyViewers = shouldShowCountyViewers(jurisdiction);
@@ -665,7 +778,7 @@ function clearChat() {
       if (parsed?.zoning) {
         blocks.push('Zoning');
         blocks.push(
-          ...Object.entries(parsed.zoning).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+          ...Object.entries(parsed.zoning).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
         );
         blocks.push('');
       }
@@ -675,14 +788,14 @@ function clearChat() {
       } else if (parsed?.overlays) {
         blocks.push('Overlays');
         blocks.push(
-          ...Object.entries(parsed.overlays).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+          ...Object.entries(parsed.overlays).map(([k, v]) => `${formatFieldLabel(k)}: ${v}`)
         );
         blocks.push('');
       }
       if (parsed?.assessor) {
         blocks.push('Assessor');
         blocks.push(
-          ...Object.entries(parsed.assessor).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+          ...Object.entries(parsed.assessor).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
         );
       }
       return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
@@ -701,13 +814,14 @@ function clearChat() {
         {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
 
         {/* viewer links */}
+        {/* FIX #41: Use formatAIN for tooltip */}
         {parsed?.ain && (
           <a
             href={assessorParcelUrl(parsed.ain)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-            title="Open Assessor Portal"
+            title={`View parcel ${formatAIN(parsed.ain)} on Assessor Portal`}
           >
             Assessor ↗
           </a>
@@ -750,15 +864,19 @@ function clearChat() {
           </>
         )}
 
-        {/* actions for this reply */}
+        {/* actions for this reply - FIX #40: Clearer button labels */}
         <div className="ml-auto flex gap-2">
           <button
             type="button"
-            onClick={() => navigator.clipboard.writeText(buildCopyAll()).catch(() => {})}
-            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-            title="Copy this reply"
+            onClick={() => handleCopy('all', buildCopyAll())}
+            className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
+              copiedSection === 'all' 
+                ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
+                : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+            }`}
+            title="Copy entire response to clipboard"
           >
-            Copy all
+            {copiedSection === 'all' ? '✓ Copied!' : 'Copy All'}
           </button>
 
           <button
@@ -772,27 +890,37 @@ function clearChat() {
                 groupedOverlays: parsed?.groupedOverlays ?? null,
                 assessor: parsed?.assessor ?? null,
                 raw: parsed?.raw ?? text,
+                metadata: metadata ?? null,
               };
               downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
             }}
-            className="text-xs px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
-            title="Download JSON"
+            className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            title="Download response as JSON file"
           >
             Download JSON
           </button>
         </div>
       </div>
 
-      {/* structured cards */}
+      {/* FIX #38: Show query timestamp if available */}
+      {metadata?.queriedAt && (
+        <p className="text-xs text-slate-400 dark:text-slate-500">
+          Retrieved {new Date(metadata.queriedAt).toLocaleString()}
+        </p>
+      )}
+
+      {/* structured cards - FIX #37, #40: Pass copy state for feedback */}
       {parsed?.zoning && (
         <SectionCard
           title="Zoning"
           data={parsed.zoning}
+          sectionKey="zoning"
+          copiedSection={copiedSection}
           onCopy={() => {
             const block = Object.entries(parsed.zoning!)
-              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
               .join('\n');
-            navigator.clipboard.writeText(`Zoning\n${block}`).catch(() => {});
+            handleCopy('zoning', `Zoning\n${block}`);
           }}
         />
       )}
@@ -801,9 +929,10 @@ function clearChat() {
       {parsed?.groupedOverlays && (
         <GroupedOverlaysCard
           data={parsed.groupedOverlays}
+          copiedSection={copiedSection}
           onCopy={() => {
             const copyText = buildGroupedOverlaysCopyText(parsed.groupedOverlays!);
-            navigator.clipboard.writeText(copyText).catch(() => {});
+            handleCopy('overlays', copyText);
           }}
         />
       )}
@@ -811,11 +940,13 @@ function clearChat() {
         <SectionCard
           title="Overlays"
           data={parsed.overlays}
+          sectionKey="overlays"
+          copiedSection={copiedSection}
           onCopy={() => {
             const block = Object.entries(parsed.overlays!)
-              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .map(([k, v]) => `${formatFieldLabel(k)}: ${v}`)
               .join('\n');
-            navigator.clipboard.writeText(`Overlays\n${block}`).catch(() => {});
+            handleCopy('overlays', `Overlays\n${block}`);
           }}
         />
       )}
@@ -824,22 +955,30 @@ function clearChat() {
         <SectionCard
           title="Assessor"
           data={parsed.assessor}
+          sectionKey="assessor"
+          copiedSection={copiedSection}
           onCopy={() => {
             const block = Object.entries(parsed.assessor!)
-              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${formatValueWithUnits(k, v)}`)
+              .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
               .join('\n');
-            navigator.clipboard.writeText(`Assessor\n${block}`).catch(() => {});
+            handleCopy('assessor', `Assessor\n${block}`);
           }}
         />
       )}
 
-      {/* raw toggle */}
+      {/* FIX #39: More visible raw toggle button */}
       <button
         type="button"
         onClick={() => setShowRawForIndex(showRaw ? null : index)}
-        className="text-xs text-slate-600 dark:text-slate-300 hover:underline"
+        className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md 
+                   bg-slate-200 dark:bg-slate-700 
+                   text-slate-700 dark:text-slate-200
+                   hover:bg-slate-300 dark:hover:bg-slate-600
+                   transition-colors min-h-[44px]"
+        title={showRaw ? 'Hide raw response' : 'Show raw response'}
       >
-        {showRaw ? 'Hide raw text' : 'Show raw text'}
+        <span>{showRaw ? '▼' : '▶'}</span>
+        <span>{showRaw ? 'Hide raw text' : 'Show raw text'}</span>
       </button>
 
       {showRaw && (
@@ -869,7 +1008,8 @@ return (
               </ReactMarkdown>
             </div>
           ) : (
-            <AssistantBubble text={message.content} index={index} />
+            /* FIX #38: Pass metadata to AssistantBubble */
+            <AssistantBubble text={message.content} index={index} metadata={message.metadata} />
           )}
         </div>
       ))}
