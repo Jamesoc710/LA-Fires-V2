@@ -600,7 +600,7 @@ export async function POST(request: NextRequest) {
 
                         // FIX #25: Log audit summary
                         if (audit) {
-                          console.log(`[CHAT] Overlay audit: ${audit.length} layers queried, ${audit.filter(a => a.cardCreated).length} cards created`);
+                          console.log(`[CHAT] Overlay audit: ${audit.layersQueried} layers queried, ${audit.cardsCreated} cards created`);
                         }
 
                         if (overlays && overlays.length > 0) {
