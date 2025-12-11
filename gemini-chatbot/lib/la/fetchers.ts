@@ -217,7 +217,7 @@ const OVERLAY_FIELD_PRIORITY = [
   // Names and labels - primary identifiers
   'NAME', 'TITLE', 'LABEL', 'DISTRICT', 
   'HPOZ_NAME', 'CSD_NAME', 'SEA_NAME', 'CPIO_NAME',
-  'PLAN_NAME', 'SPEC_PLAN', 'SPECIFIC_PLAN', 'OVERLAY_NAME',
+  'PLAN_NAME', 'SPEC_PLAN', 'SPECIFIC_PLAN', 'OVERLAY_NAME', 'SPA_NM',
   
   // Descriptions
   'DESCRIPTIO', 'DESCRIPTION', 'NOTES', 'TYPE', 'CATEGORY',
@@ -316,7 +316,7 @@ function summarizeOverlayAttrs(
 
   // Try provided field lists first
   const name = pickField(nameCsv) ??
-               pickField("NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME,CSD_NAME,SEA_NAME");
+               pickField("NAME,TITLE,LABEL,DISTRICT,ZONE,PLAN,OVERLAY,CPIO_NAME,HPOZ_NAME,CSD_NAME,SEA_NAME,SPA_NM,SPEC_PLAN,PLAN_NAME");
   const desc = pickField(descCsv) ??
                pickField("DESCRIPTIO,DESCRIPTION,NOTES,TYPE,CATEGORY,GPLU_DESC,LU_LABEL");
                
@@ -810,8 +810,9 @@ export async function lookupCityOverlays(
 
     // Specific Plan Areas
     if (lowerLabel.includes("specific plan")) {
-      // Try multiple field name variations (LA City uses different field names)
+      // Try multiple field name variations (LA City uses SPA_NM)
       const planName = 
+        rawFeat.SPA_NM ??           // LA City uses this field name
         rawFeat.SPEC_PLAN ?? 
         rawFeat.PLAN_NAME ?? 
         rawFeat.NAME ?? 
@@ -820,18 +821,12 @@ export async function lookupCityOverlays(
         rawFeat.PlanName ??
         rawFeat.SP_NAME ??
         rawFeat.SPECIFICPLAN ??
-        summary ??  // Use the computed summary as fallback
+        summary ??
         null;
       
       // Debug logging to see what fields are available
       console.log("[OVERLAY_AUDIT] Specific Plan raw fields:", Object.keys(rawFeat).join(", "));
-      console.log("[OVERLAY_AUDIT] Specific Plan field values:", {
-        SPEC_PLAN: rawFeat.SPEC_PLAN,
-        PLAN_NAME: rawFeat.PLAN_NAME,
-        NAME: rawFeat.NAME,
-        TITLE: rawFeat.TITLE,
-        summary,
-      });
+      console.log("[OVERLAY_AUDIT] Specific Plan extracted name:", planName);
       
       const displayName = planName 
         ? `Specific Plan: ${planName}`
