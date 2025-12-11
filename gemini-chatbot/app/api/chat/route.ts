@@ -915,8 +915,17 @@ FORMAT
       timestamp: new Date().toISOString(),
     });
 
+    // FIX #38: Include metadata in response for timestamp and jurisdiction
     return NextResponse.json(
-      { response: text, intent },
+      { 
+        response: text, 
+        intent,
+        metadata: {
+          queriedAt: new Date().toISOString(),
+          jurisdiction: detectedJurisdiction || undefined,
+          sources: ['LA County GIS', 'LA County Assessor', detectedJurisdiction ? `City of ${detectedJurisdiction} GIS` : null].filter(Boolean),
+        }
+      },
       { 
         status: 200,
         headers: getRateLimitHeaders(rateCheck)
@@ -925,7 +934,13 @@ FORMAT
   } catch (error: any) {
     log.error('CHAT', 'Fatal error', { error: String(error) });
     return NextResponse.json(
-      { response: friendlyFallbackMessage(), intent: "" },
+      { 
+        response: friendlyFallbackMessage(), 
+        intent: "",
+        metadata: {
+          queriedAt: new Date().toISOString(),
+        }
+      },
       { 
         status: 200,
         headers: getRateLimitHeaders(rateCheck)
