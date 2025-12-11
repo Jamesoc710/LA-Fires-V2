@@ -1,5 +1,6 @@
 // app/api/chat/route.ts
-// Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
+// Phase 5A: Standardized Zoning Fields Across Jurisdictions
+// Includes Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -16,6 +17,12 @@ import {
 import { getCityProvider, debugProvidersLog } from "@/lib/la/providers";
 import { createRequestLogger, logRequestMetrics, createTimer, type RequestLogger } from "@/lib/la/logger";
 import { checkRateLimit, getClientIdentifier, getRateLimitHeaders, RATE_LIMITS } from "@/lib/la/rateLimit";
+import { 
+  normalizeZoningData, 
+  formatZoningForContext, 
+  createZoningCard,
+  type NormalizedZoning 
+} from "@/lib/la/fieldNormalizer";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -208,14 +215,7 @@ function formatGroupedOverlays(overlays: OverlayCard[], jurisdiction: string): s
         if (detailsClean) {
           const namePattern = new RegExp(`^${escapeRegex(card.name)}\\s*[-—]?\\s*`, 'i');
           detailsClean = detailsClean.replace(namePattern, '').trim();
-          detailsClean = detailsClean.replace(new RegExp(escapeRegex(card.name), "gi"), "").trim();
-          detailsClean = detailsClean
-            .replace(/^[-—]\s*/, '')
-            .replace(/\s*[-—]\s*[-—]\s*/g, ' — ')
-            .replace(/\s+/g, ' ')
-            .trim();
-          
-          if (detailsClean && detailsClean !== "—" && detailsClean.length > 2) {
+          if (detailsClean && detailsClean !== '—' && detailsClean.length > 2) {
             itemLine += ` — ${detailsClean}`;
           }
         }
@@ -243,7 +243,12 @@ function toOpenAIStyleMessages(geminiStyleContents: any[]) {
   }));
 }
 
-async function callOpenRouter(model: string, contents: any[], req?: NextRequest, temperature = 0.2) {
+async function callOpenRouter(
+  model: string,
+  contents: any[],
+  req?: NextRequest,
+  temperature = 0.2
+) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
@@ -304,35 +309,30 @@ function friendlyFallbackMessage() {
 /* --------------------------------- POST -------------------------------- */
 
 export async function POST(request: NextRequest) {
-  // FIX #31: Create request-scoped logger
-  const log = createRequestLogger();
-  log.log('CHAT', 'Request started');
-  
-  // FIX #30: Rate limiting
-  const clientId = getClientIdentifier(request.headers);
-  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.chat.maxRequests, RATE_LIMITS.chat.windowMs);
+  // Rate limiting check
+  const clientId = getClientIdentifier(request);
+  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.REQUESTS_PER_MINUTE);
   
   if (!rateCheck.allowed) {
-    log.warn('RATELIMIT', 'Rate limit exceeded', { clientId, resetIn: rateCheck.resetIn });
     return NextResponse.json(
-      { 
-        error: 'Rate limit exceeded',
-        message: `Too many requests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)} seconds.`,
-        retryAfter: Math.ceil(rateCheck.resetIn / 1000)
-      },
+      { error: "Rate limit exceeded. Please wait before making more requests." },
       { 
         status: 429,
-        headers: {
-          'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)),
-          ...getRateLimitHeaders(rateCheck)
-        }
+        headers: getRateLimitHeaders(rateCheck)
       }
     );
   }
 
-  // Track cache hits/misses for metrics
+  // Create request logger
+  const log = createRequestLogger();
+  log.log('CHAT', 'Request started', { clientId: clientId.slice(0, 8) + '...' });
+
+  let detectedJurisdiction: string | null = null;
+  let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
   let cacheHits = 0;
   let cacheMisses = 0;
+  let overlayCount = 0;
+  let communityName: string | null = null;
 
   try {
     noStore();
@@ -341,13 +341,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid request. Messages must be an array." }, { status: 400 });
     }
 
+    log.benchmark('request_parsed');
+
     const contextData = await loadAllContextFiles();
     const lastUser = messages[messages.length - 1]?.content || "";
     const intent = lastUser;
 
-    // --- Step 1: Decide which sections to render ---
+    // Determine which sections to show
     const qForIntent = intent.toLowerCase();
-    let SHOW_ZONING = false;
+
+    let SHOW_ZONING   = false;
     let SHOW_OVERLAYS = false;
     let SHOW_ASSESSOR = false;
 
@@ -363,13 +366,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    log.log('CHAT', 'Flags set', { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
+    log.log('CHAT', 'Flags determined', { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
 
-    // --- Step 2: Live lookups (TOOL OUTPUTS) ---
+    // --- Step 2: live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
-    let detectedJurisdiction: string | null = null;
-    let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
-    let communityName: string | null = null;
     
     type SectionStatus = "success" | "no_data" | "error" | "not_configured" | "not_implemented";
     let zoningStatus: SectionStatus = "no_data";
@@ -378,15 +378,16 @@ export async function POST(request: NextRequest) {
     let zoningMessage: string | null = null;
     let overlaysMessage: string | null = null;
     let assessorMessage: string | null = null;
-    let overlayCount = 0;
-    
+
     try {
       if (wantsParcelLookup(lastUser)) {
         const apn = extractApn(lastUser);
         const address = extractAddress(lastUser);
 
         if (apn) {
-          // FIX #26 & #29: Get parcel ONCE, share with all lookups
+          log.log('CHAT', 'APN extracted', { apn });
+          
+          // Get parcel data once (FIX #26 deduplication)
           const parcelTimer = createTimer('parcel_lookup');
           const parcel = await getParcelByAINorAPN(apn);
           parcelTimer.stopAndLog(log);
@@ -395,7 +396,7 @@ export async function POST(request: NextRequest) {
             zoningStatus = "error";
             overlaysStatus = "error";
             assessorStatus = "error";
-            const errMsg = `Parcel with APN/AIN ${apn} not found in LA County records. Please verify the APN is correct.`;
+            const errMsg = `Parcel with APN/AIN ${apn} not found in LA County records.`;
             zoningMessage = errMsg;
             overlaysMessage = errMsg;
             assessorMessage = errMsg;
@@ -432,17 +433,12 @@ export async function POST(request: NextRequest) {
                 const dataTimer = createTimer('city_data_queries');
                 
                 const [zoningResult, overlaysResult, assessorResult] = await Promise.allSettled([
-                  // City zoning (pass parcel to avoid re-fetch)
                   SHOW_ZONING && provider
                     ? lookupCityZoning(apn, provider, parcel)
                     : Promise.resolve(null),
-                  
-                  // City overlays (already parallel internally)
                   SHOW_OVERLAYS && provider?.method === "arcgis_query" && provider.overlays?.length
                     ? lookupCityOverlays(centroid, provider.overlays)
                     : Promise.resolve(null),
-                  
-                  // Assessor (county-wide)
                   SHOW_ASSESSOR
                     ? lookupAssessor(apn)
                     : Promise.resolve(null),
@@ -450,7 +446,7 @@ export async function POST(request: NextRequest) {
                 
                 dataTimer.stopAndLog(log);
 
-                // Process zoning result
+                // Process zoning result with NORMALIZATION (FIX #32, #33, #34)
                 if (SHOW_ZONING) {
                   if (provider) {
                     if (zoningResult.status === "fulfilled" && zoningResult.value) {
@@ -459,12 +455,16 @@ export async function POST(request: NextRequest) {
                       
                       if (hasZoningData) {
                         zoningStatus = "success";
-                        const cardWithJurisdiction = {
+                        
+                        // FIX #32, #33, #34: Normalize zoning data
+                        const normalized = normalizeZoningData(cityZ.card.raw, detectedJurisdiction!);
+                        const formattedZoning = formatZoningForContext(normalized);
+                        
+                        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
                           status: "success",
-                          ...(cityZ.card ?? cityZ),
-                          jurisdiction: detectedJurisdiction,
-                        };
-                        toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cardWithJurisdiction, null, 2)}`;
+                          formatted: formattedZoning,
+                          card: createZoningCard(normalized),
+                        }, null, 2)}`;
                       } else {
                         zoningStatus = "no_data";
                         zoningMessage = `No zoning data found for this parcel in ${cityName}.`;
@@ -598,16 +598,27 @@ export async function POST(request: NextRequest) {
                   }
                 }
 
-                // Handle zoning result
+                // Handle zoning result with NORMALIZATION (FIX #32, #33, #34)
                 if (SHOW_ZONING) {
                   if (zRes.status === "fulfilled" && zRes.value) {
                     const zData = zRes.value as any;
                     if (zData.zoning) {
                       zoningStatus = "success";
+                      
+                      // FIX #32, #33, #34: Build raw data object from county response
+                      const rawZoningData: Record<string, any> = {
+                        ZONE: zData.zoning,
+                        ...(zData.details || {}),
+                      };
+                      
+                      const normalized = normalizeZoningData(rawZoningData, detectedJurisdiction!);
+                      const formattedZoning = formatZoningForContext(normalized);
+                      
                       toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
                         status: "success",
-                        jurisdiction: detectedJurisdiction,
-                        ...zData,
+                        formatted: formattedZoning,
+                        card: createZoningCard(normalized),
+                        links: zData.links,
                       }, null, 2)}`;
                     } else {
                       zoningStatus = "no_data";
@@ -734,6 +745,7 @@ ASSESSOR_STATUS: ${assessorStatus}${assessorMessage ? `\nASSESSOR_MESSAGE: ${ass
     log.benchmark('tool_context_ready');
 
     // --- Step 3: Build prompts ---
+    // FIX #32, #33, #34: Updated system prompt with standardized field names
     const systemPreamble = `
 You are LA-Fires Assistant.
 
@@ -744,8 +756,6 @@ RULES
 - Only include a section if its SHOW_* flag is true.
 - Use plain text only (no Markdown, no bullets, no tables) EXCEPT for the Overlays section.
 - Inside Zoning and Assessor sections, use concise "KEY: VALUE" lines.
-- Prefer human-friendly fields such as: jurisdiction, zone, category, community plan,
-  plan designation, program, name, description, SEA_NAME, HAZ_CLASS, CSD_NAME, etc.
 - Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
   internal IDs, URLs, status fields, or TITLE22 codes.
 - Do not mention tools, JSON, or APIs in the final answer.
@@ -758,9 +768,23 @@ Check the [SECTION_STATUS] block for each section's status:
 - "not_configured": Show the section heading, then: "Not yet available for this city. Use the city's official GIS viewer."
 - "not_implemented": Show the section heading, then the message from SECTION_STATUS.
 
-IMPORTANT - JURISDICTION
-- The Zoning section MUST always include JURISDICTION as the first field.
-- Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County (Altadena)").
+CRITICAL - ZONING SECTION (FIX #32, #33, #34)
+When the zoning tool output contains a "formatted" field, output its contents EXACTLY as provided.
+The formatted zoning uses STANDARDIZED field names that are consistent across all jurisdictions:
+- JURISDICTION (always first)
+- ZONE (the zone code like R1-1VL, RS-4, R-1-10000)
+- ZONE DESCRIPTION (human-readable name like "Single Family Residential")
+- GENERAL PLAN (if available)
+- GENERAL PLAN DESCRIPTION (if available)
+- COMMUNITY/PLANNING AREA (if available)
+- SPECIFIC PLAN (if available)
+
+Do NOT use jurisdiction-specific field names like:
+- GEN CODE (use ZONE DESCRIPTION instead)
+- GEN PLAN (use GENERAL PLAN instead)
+- CATEGORY (use ZONE DESCRIPTION instead)
+- PLANNINGAREA (use COMMUNITY/PLANNING AREA instead)
+- TITLE22 (never show this)
 
 CRITICAL - OVERLAYS SECTION
 - When the overlay tool output contains a "formatted" field, output its contents EXACTLY as provided.
@@ -845,6 +869,11 @@ FORMAT
             if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) return false;
             if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) return false;
             if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) return false;
+            // FIX #32: Filter out old inconsistent field names that shouldn't appear
+            if (/^\s*GEN[_\s]?CODE\s*:/i.test(line)) return false;
+            if (/^\s*CODE[_\s]?LABEL\s*:/i.test(line)) return false;
+            if (/^\s*PLANNINGAREA\s*:/i.test(line)) return false;
+            if (/^\s*Z_CATEGORY\s*:/i.test(line)) return false;
             return true;
           });
 
