@@ -1,3 +1,5 @@
+// app/api/chat/route.ts
+// Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -11,12 +13,12 @@ import {
   lookupCityZoning,
   lookupCityOverlays
 } from "@/lib/la/fetchers";
-import { resolveCityProvider, getCityProvider, debugProvidersLog } from "@/lib/la/providers";
+import { getCityProvider, debugProvidersLog } from "@/lib/la/providers";
+import { createRequestLogger, logRequestMetrics, createTimer, type RequestLogger } from "@/lib/la/logger";
+import { checkRateLimit, getClientIdentifier, getRateLimitHeaders, RATE_LIMITS } from "@/lib/la/rateLimit";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
-const OR_PRIMARY_MODEL = process.env.OR_PRIMARY_MODEL || "google/gemini-2.0-flash-001";
-const OR_FALLBACK_MODEL = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
 
 if (!OR_API_KEY) {
   console.warn("[WARN] Missing OPENROUTER_API_KEY — OpenRouter requests will fail");
@@ -41,25 +43,13 @@ function extractAddress(s: string): string | undefined {
   return undefined;
 }
 
-function wantsZoningSection(s: string) {
-  const q = s.toLowerCase();
-  return /\bzoning\b|\bzone\b|apn|ain|r-\d{1,5}|\btitle\s*22\b|\bplng\b|\bplanning\s*area\b/.test(q);
-}
-
-function wantsOverlaysSection(s: string) {
-  const q = s.toLowerCase();
-  return /\boverlays?\b|\bcsd\b|\bsea\b|\bridgeline\b|\btod\b|\bhpoz\b|\bspecific\s*plan\b|\bplan[_\s-]?leg\b/.test(q);
-}
-
 function wantsAssessorSection(s: string) {
   const q = s.toLowerCase();
   return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
 }
 
-
 /* ---------------- Grouped Overlay Formatter ---------------- */
 
-// Match the OverlayCard type from lib/la/types.ts
 interface OverlayCard {
   source: "City" | "County";
   program: "SUD" | "HPOZ" | "CSD" | "SEA" | "Other";
@@ -68,66 +58,42 @@ interface OverlayCard {
   attributes?: Record<string, any>;
 }
 
-// FIX #11, #12, #13, #23: Expanded category types
 type OverlayCategory = 
   | "Hazards"
-  | "Environmental Protection"      // FIX #11: SEA moved here
-  | "Development Regulations"       // FIX #12: HMA moved here; FIX #23: Sign districts
+  | "Environmental Protection"
+  | "Development Regulations"
   | "Historic Preservation"
   | "Supplemental Use Districts"
-  | "Community Standards"           // FIX #13: CSD category
+  | "Community Standards"
   | "Land Use & Planning"
-  | "Additional Overlays";          // FIX #13: Renamed from "Other"
+  | "Additional Overlays";
 
-// Items to filter out entirely (noise, not useful)
-const NOISE_ITEMS = [
-  "county overlay",
-  "city overlay",
-  "overlay",
-];
+const NOISE_ITEMS = ["county overlay", "city overlay", "overlay"];
 
 function isNoiseItem(name: string, details?: string): boolean {
   const combined = `${name} ${details || ""}`.toLowerCase().trim();
   return NOISE_ITEMS.some(noise => combined === noise || name.toLowerCase().trim() === noise);
 }
 
-// FIX #15: Helper to clean redundant descriptions
 function cleanRedundantDescription(name: string, details: string | undefined): string {
   if (!details) return '';
-  
   const nameLower = name.toLowerCase();
   const detailsLower = details.toLowerCase();
-  
-  // If details just restates the name in different words, skip it
   const redundantPatterns = [
-    'parcel is inside the',
-    'parcel is within the',
-    'parcel is in the',
-    'located in',
-    'located within',
-    'falls within',
-    'is in the',
-    'is inside the',
+    'parcel is inside the', 'parcel is within the', 'parcel is in the',
+    'located in', 'located within', 'falls within', 'is in the', 'is inside the',
   ];
-  
   for (const pattern of redundantPatterns) {
-    // Check if description contains pattern AND references the zone name
     if (detailsLower.includes(pattern)) {
-      // Extract first significant word from name (e.g., "fire" from "Fire Hazard Zone")
       const nameWords = nameLower.split(/\s+/).filter(w => w.length > 3);
       for (const word of nameWords) {
-        if (detailsLower.includes(word)) {
-          // The description is just restating that the parcel is in this zone
-          return '';
-        }
+        if (detailsLower.includes(word)) return '';
       }
     }
   }
-  
   return details;
 }
 
-// FIX #14: Helper to escape regex special characters
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -137,125 +103,59 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
   const details = (card.details || "").toLowerCase();
   const combined = `${name} ${details}`;
   
-  // FIX #11: Environmental Protection - check FIRST before Hazards
-  // SEA (Significant Ecological Area) is environmental protection, not a hazard
-  if (
-    card.program === "SEA" ||
-    combined.includes("sea:") ||
-    combined.includes("sea ordinance") ||
-    combined.includes("significant ecological")
-  ) {
+  if (card.program === "SEA" || combined.includes("sea:") || combined.includes("sea ordinance") || combined.includes("significant ecological")) {
     return "Environmental Protection";
   }
   
-  // FIX #12: Development Regulations - slope/grading/design requirements
-  // These are development constraints, not hazards
-  if (
-    combined.includes("hillside management") ||
-    combined.includes("hillside area") ||
-    (combined.includes("hma") && !combined.includes("hazard")) ||
-    combined.includes("ridgeline") ||
-    combined.includes("grading") ||
-    (combined.includes("slope") && !combined.includes("landslide"))
-  ) {
+  if (combined.includes("hillside management") || combined.includes("hillside area") || 
+      (combined.includes("hma") && !combined.includes("hazard")) ||
+      combined.includes("ridgeline") || combined.includes("grading") ||
+      (combined.includes("slope") && !combined.includes("landslide"))) {
     return "Development Regulations";
   }
   
-  // FIX #23: Sign Districts - categorize as Development Regulations
-  if (
-    combined.includes("sign district") ||
-    combined.includes("sign_dist")
-  ) {
+  if (combined.includes("sign district") || combined.includes("sign_dist")) {
     return "Development Regulations";
   }
   
-  // FIX #13: Community Standards Districts
-  if (
-    card.program === "CSD" ||
-    combined.includes("csd") ||
-    combined.includes("community standards") ||
-    combined.includes("community standard district")
-  ) {
+  if (card.program === "CSD" || combined.includes("csd") || combined.includes("community standards")) {
     return "Community Standards";
   }
   
-  // FIX #20, #21: Hazards - critical for rebuild safety
-  // Includes fire hazards, evacuation zones, and flood zones
-  if (
-    combined.includes("fire") ||
-    combined.includes("hazard") ||
-    combined.includes("flood") ||
-    combined.includes("fema") ||           // FIX #21: FEMA flood zones
-    combined.includes("sfha") ||           // FIX #21: Special Flood Hazard Area
-    combined.includes("floodplain") ||     // FIX #21
-    combined.includes("floodway") ||       // FIX #21
-    combined.includes("evacuation") ||     // FIX #20: Evacuation zones
-    combined.includes("evac zone") ||      // FIX #20
-    combined.includes("ready set go") ||   // FIX #20: LA City evacuation program
-    combined.includes("landslide") ||
-    combined.includes("fault") ||
-    combined.includes("liquefaction") ||
-    combined.includes("tsunami") ||
-    combined.includes("seismic")
-  ) {
+  if (combined.includes("fire") || combined.includes("hazard") || combined.includes("flood") ||
+      combined.includes("fema") || combined.includes("sfha") || combined.includes("floodplain") ||
+      combined.includes("floodway") || combined.includes("evacuation") || combined.includes("evac zone") ||
+      combined.includes("ready set go") || combined.includes("landslide") || combined.includes("fault") ||
+      combined.includes("liquefaction") || combined.includes("tsunami") || combined.includes("seismic")) {
     return "Hazards";
   }
   
-  // FIX #24: Historic Preservation - includes Historic Cultural Monuments
-  if (
-    card.program === "HPOZ" ||
-    combined.includes("historic") ||
-    combined.includes("hpoz") ||
-    combined.includes("landmark") ||
-    combined.includes("national register") ||
-    combined.includes("monument") ||
-    combined.includes("hcm")              // FIX #24: Historic Cultural Monument
-  ) {
+  if (card.program === "HPOZ" || combined.includes("historic") || combined.includes("hpoz") ||
+      combined.includes("landmark") || combined.includes("national register") ||
+      combined.includes("monument") || combined.includes("hcm")) {
     return "Historic Preservation";
   }
   
-  // Supplemental Use Districts
-  if (
-    card.program === "SUD" ||
-    combined.includes("sud") ||
-    combined.includes("supplemental use")
-  ) {
+  if (card.program === "SUD" || combined.includes("sud") || combined.includes("supplemental use")) {
     return "Supplemental Use Districts";
   }
   
-  // FIX #22: Land Use & Planning - includes Specific Plans
-  if (
-    combined.includes("general plan") ||
-    combined.includes("specific plan") ||
-    combined.includes("community plan") ||
-    combined.includes("transit") ||
-    combined.includes("gplu") ||
-    combined.includes("land use") ||
-    combined.includes("cpa") ||
-    combined.includes("redevelopment") ||
-    combined.includes("density residential") ||
-    combined.includes("low density") ||
-    combined.includes("medium density") ||
-    combined.includes("high density") ||
-    combined.includes("residential —") ||
-    combined.includes("commercial —") ||
-    combined.includes("industrial —")
-  ) {
+  if (combined.includes("general plan") || combined.includes("specific plan") ||
+      combined.includes("community plan") || combined.includes("transit") ||
+      combined.includes("gplu") || combined.includes("land use") || combined.includes("cpa") ||
+      combined.includes("redevelopment") || combined.includes("density residential") ||
+      combined.includes("low density") || combined.includes("medium density") ||
+      combined.includes("high density") || combined.includes("residential —") ||
+      combined.includes("commercial —") || combined.includes("industrial —")) {
     return "Land Use & Planning";
   }
   
-  // FIX #13: Default to "Additional Overlays" instead of vague "Other"
   return "Additional Overlays";
 }
 
-function formatGroupedOverlays(
-  overlays: OverlayCard[],
-  jurisdiction: string
-): string {
-  // Handle null/undefined overlays array
+function formatGroupedOverlays(overlays: OverlayCard[], jurisdiction: string): string {
   const safeOverlays = overlays || [];
   
-  // FIX #11, #12, #13: Updated groups with new categories
   const groups: Record<OverlayCategory, OverlayCard[]> = {
     "Hazards": [],
     "Environmental Protection": [],
@@ -268,73 +168,47 @@ function formatGroupedOverlays(
   };
 
   for (const card of safeOverlays) {
-    // Skip noise items
-    if (isNoiseItem(card.name, card.details)) {
-      continue;
-    }
+    if (isNoiseItem(card.name, card.details)) continue;
     const category = categorizeOverlay(card);
     groups[category].push(card);
   }
 
-  // Build formatted output
   const lines: string[] = [];
   lines.push(`JURISDICTION: ${jurisdiction}`);
 
-  // FIX #11, #12, #13: Updated category order (most important first)
   const categoryOrder: OverlayCategory[] = [
-    "Hazards",
-    "Environmental Protection",
-    "Development Regulations",
-    "Historic Preservation",
-    "Supplemental Use Districts",
-    "Land Use & Planning",
-    "Community Standards",
-    "Additional Overlays",
+    "Hazards", "Environmental Protection", "Development Regulations",
+    "Historic Preservation", "Supplemental Use Districts",
+    "Land Use & Planning", "Community Standards", "Additional Overlays",
   ];
 
-  // FIX #10: Key categories that should always appear, even if empty
-  const keyCategories: OverlayCategory[] = [
-    "Hazards",
-    "Historic Preservation",
-    "Land Use & Planning",
-  ];
+  const keyCategories: OverlayCategory[] = ["Hazards", "Historic Preservation", "Land Use & Planning"];
 
   for (const category of categoryOrder) {
     const items = groups[category];
     const isKeyCategory = keyCategories.includes(category);
     
-    // FIX #10: Show key categories even if empty, skip non-key empty categories
     if (items.length === 0 && !isKeyCategory) continue;
 
-    lines.push(""); // blank line before category
+    lines.push("");
     lines.push(`${category.toUpperCase()}:`);
 
-    // FIX #10: Show "None found" for empty key categories
     if (items.length === 0) {
       lines.push(`  • None found for this parcel`);
       continue;
     }
 
-    // Dedupe items within category by normalized text
     const seen = new Set<string>();
     
     for (const card of items) {
-      // FIX #14: Enhanced deduplication for "Low Residential — Low Residential" issue
       let itemLine = `  • ${card.name}`;
       
       if (card.details && card.details !== card.name) {
-        // FIX #15: Clean redundant descriptions first
         let detailsClean = cleanRedundantDescription(card.name, card.details);
-        
         if (detailsClean) {
-          // FIX #14: Remove the name if it appears at the start of details
           const namePattern = new RegExp(`^${escapeRegex(card.name)}\\s*[-—]?\\s*`, 'i');
           detailsClean = detailsClean.replace(namePattern, '').trim();
-          
-          // Also remove if name appears anywhere in details (case-insensitive)
           detailsClean = detailsClean.replace(new RegExp(escapeRegex(card.name), "gi"), "").trim();
-          
-          // Clean up any resulting double dashes or leading dashes
           detailsClean = detailsClean
             .replace(/^[-—]\s*/, '')
             .replace(/\s*[-—]\s*[-—]\s*/g, ' — ')
@@ -347,11 +221,8 @@ function formatGroupedOverlays(
         }
       }
       
-      // Dedupe: normalize and check if we've seen this
       const normalized = itemLine.toLowerCase().replace(/\s+/g, " ").trim();
-      if (seen.has(normalized)) {
-        continue; // Skip duplicate
-      }
+      if (seen.has(normalized)) continue;
       seen.add(normalized);
       
       lines.push(itemLine);
@@ -372,13 +243,7 @@ function toOpenAIStyleMessages(geminiStyleContents: any[]) {
   }));
 }
 
-
-async function callOpenRouter(
-  model: string,
-  contents: any[],
-  req?: NextRequest,
-  temperature = 0.2
-) {
+async function callOpenRouter(model: string, contents: any[], req?: NextRequest, temperature = 0.2) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
@@ -411,7 +276,6 @@ async function callOpenRouter(
   return text.trim();
 }
 
-
 async function orWithRetryAndFallback(contents: any[], req: NextRequest, temperature = 0.2) {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-2.0-flash-001";
   const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-3.5-sonnet";
@@ -433,7 +297,6 @@ async function orWithRetryAndFallback(contents: any[], req: NextRequest, tempera
   throw new Error("All OpenRouter attempts failed");
 }
 
-
 function friendlyFallbackMessage() {
   return "The AI service is busy right now. I still fetched your zoning/overlays/assessor links—try the AI summary again in a moment.";
 }
@@ -441,6 +304,36 @@ function friendlyFallbackMessage() {
 /* --------------------------------- POST -------------------------------- */
 
 export async function POST(request: NextRequest) {
+  // FIX #31: Create request-scoped logger
+  const log = createRequestLogger();
+  log.log('CHAT', 'Request started');
+  
+  // FIX #30: Rate limiting
+  const clientId = getClientIdentifier(request.headers);
+  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.chat.maxRequests, RATE_LIMITS.chat.windowMs);
+  
+  if (!rateCheck.allowed) {
+    log.warn('RATELIMIT', 'Rate limit exceeded', { clientId, resetIn: rateCheck.resetIn });
+    return NextResponse.json(
+      { 
+        error: 'Rate limit exceeded',
+        message: `Too many requests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)} seconds.`,
+        retryAfter: Math.ceil(rateCheck.resetIn / 1000)
+      },
+      { 
+        status: 429,
+        headers: {
+          'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)),
+          ...getRateLimitHeaders(rateCheck)
+        }
+      }
+    );
+  }
+
+  // Track cache hits/misses for metrics
+  let cacheHits = 0;
+  let cacheMisses = 0;
+
   try {
     noStore();
     const { messages } = await request.json();
@@ -452,10 +345,9 @@ export async function POST(request: NextRequest) {
     const lastUser = messages[messages.length - 1]?.content || "";
     const intent = lastUser;
 
-    // --- Step 1b: decide which sections to render based on intent ---
+    // --- Step 1: Decide which sections to render ---
     const qForIntent = intent.toLowerCase();
-
-    let SHOW_ZONING   = false;
+    let SHOW_ZONING = false;
     let SHOW_OVERLAYS = false;
     let SHOW_ASSESSOR = false;
 
@@ -471,19 +363,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    console.log("[CHAT] Flags:", { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
+    log.log('CHAT', 'Flags set', { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
 
-    // --- Step 2: live lookups (TOOL OUTPUTS) ---
+    // --- Step 2: Live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
-    
-    // Track jurisdiction for consistent output
     let detectedJurisdiction: string | null = null;
     let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
-    
-    // FIX #19: Track community name for unincorporated areas
     let communityName: string | null = null;
     
-    // Track status for each section to provide clear messaging
     type SectionStatus = "success" | "no_data" | "error" | "not_configured" | "not_implemented";
     let zoningStatus: SectionStatus = "no_data";
     let overlaysStatus: SectionStatus = "no_data";
@@ -491,6 +378,7 @@ export async function POST(request: NextRequest) {
     let zoningMessage: string | null = null;
     let overlaysMessage: string | null = null;
     let assessorMessage: string | null = null;
+    let overlayCount = 0;
     
     try {
       if (wantsParcelLookup(lastUser)) {
@@ -498,10 +386,12 @@ export async function POST(request: NextRequest) {
         const address = extractAddress(lastUser);
 
         if (apn) {
-          // 1) Get parcel + centroid (for jurisdiction + city services)
+          // FIX #26 & #29: Get parcel ONCE, share with all lookups
+          const parcelTimer = createTimer('parcel_lookup');
           const parcel = await getParcelByAINorAPN(apn);
+          parcelTimer.stopAndLog(log);
+          
           if (!parcel?.geometry) {
-            // Parcel not found - this affects all sections
             zoningStatus = "error";
             overlaysStatus = "error";
             assessorStatus = "error";
@@ -520,25 +410,51 @@ export async function POST(request: NextRequest) {
               overlaysMessage = errMsg;
               toolContext += `\n[TOOL_ERROR] ${errMsg}`;
             } else {
-              // 2) Jurisdiction lookup (point in 102100)
+              // Jurisdiction lookup
+              const jurisdictionTimer = createTimer('jurisdiction_lookup');
               const j = await lookupJurisdictionPoint102100(centroid.x, centroid.y);
+              jurisdictionTimer.stopAndLog(log);
               
               detectedJurisdiction = j.jurisdiction || "Unknown";
               jurisdictionSource = j.source;
               
               toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
-
               debugProvidersLog(j.jurisdiction);
 
               if (j?.source === "CITY") {
+                // ─────────────────────────────────────────────
+                // CITY FLOW
+                // ─────────────────────────────────────────────
                 const cityName = j.jurisdiction || "";
                 const provider = getCityProvider(cityName);
 
-                // --- CITY ZONING ---
+                // FIX #29: Run city queries in parallel
+                const dataTimer = createTimer('city_data_queries');
+                
+                const [zoningResult, overlaysResult, assessorResult] = await Promise.allSettled([
+                  // City zoning (pass parcel to avoid re-fetch)
+                  SHOW_ZONING && provider
+                    ? lookupCityZoning(apn, provider, parcel)
+                    : Promise.resolve(null),
+                  
+                  // City overlays (already parallel internally)
+                  SHOW_OVERLAYS && provider?.method === "arcgis_query" && provider.overlays?.length
+                    ? lookupCityOverlays(centroid, provider.overlays)
+                    : Promise.resolve(null),
+                  
+                  // Assessor (county-wide)
+                  SHOW_ASSESSOR
+                    ? lookupAssessor(apn)
+                    : Promise.resolve(null),
+                ]);
+                
+                dataTimer.stopAndLog(log);
+
+                // Process zoning result
                 if (SHOW_ZONING) {
                   if (provider) {
-                    try {
-                      const cityZ = await lookupCityZoning(apn, provider);
+                    if (zoningResult.status === "fulfilled" && zoningResult.value) {
+                      const cityZ = zoningResult.value as any;
                       const hasZoningData = cityZ?.card?.raw && Object.keys(cityZ.card.raw).length > 0;
                       
                       if (hasZoningData) {
@@ -551,118 +467,80 @@ export async function POST(request: NextRequest) {
                         toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify(cardWithJurisdiction, null, 2)}`;
                       } else {
                         zoningStatus = "no_data";
-                        zoningMessage = `No zoning data found for this parcel in ${cityName}. Check the city's official zoning viewer.`;
+                        zoningMessage = `No zoning data found for this parcel in ${cityName}.`;
                         toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
                           status: "no_data",
                           jurisdiction: detectedJurisdiction,
                           message: zoningMessage,
-                          viewer: provider.viewer
                         }, null, 2)}`;
                       }
-                    } catch (e) {
+                    } else if (zoningResult.status === "rejected") {
                       zoningStatus = "error";
-                      zoningMessage = `Error retrieving zoning data. Try again or check the city's GIS viewer.`;
+                      zoningMessage = `Error retrieving zoning data.`;
                       toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
                         status: "error",
                         jurisdiction: detectedJurisdiction,
                         message: zoningMessage,
-                        viewer: provider.viewer
                       }, null, 2)}`;
                     }
                   } else {
                     zoningStatus = "not_configured";
-                    zoningMessage = `Zoning lookup for ${cityName} is not yet configured. County zoning does not apply to city parcels.`;
+                    zoningMessage = `Zoning lookup for ${cityName} is not yet configured.`;
                     toolContext += `\n[TOOL:city_zoning]\n${JSON.stringify({
                       status: "not_configured",
                       jurisdiction: detectedJurisdiction,
-                      city: cityName,
                       message: zoningMessage,
                     }, null, 2)}`;
                   }
                 }
 
-                // --- CITY OVERLAYS ---
+                // Process overlays result
                 if (SHOW_OVERLAYS) {
-                  if (
-                    provider &&
-                    provider.method === "arcgis_query" &&
-                    Array.isArray(provider.overlays) &&
-                    provider.overlays.length > 0
-                  ) {
-                    const centroidForOverlays = makeCentroidFromGeom(parcel.geometry);
-
-                    if (centroidForOverlays) {
-                      try {
-                        const { overlays, note, audit } = await lookupCityOverlays(
-                          centroidForOverlays,
-                          provider.overlays
-                        );
-
-                        // FIX #25: Log audit summary
-                        if (audit) {
-                          console.log(`[CHAT] Overlay audit: ${audit.layersQueried} layers queried, ${audit.cardsCreated} cards created`);
-                        }
-
-                        if (overlays && overlays.length > 0) {
-                          overlaysStatus = "success";
-                          // Use pre-formatted grouped overlays
-                          const formattedOverlays = formatGroupedOverlays(overlays, detectedJurisdiction);
-                          toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-                            status: "success",
-                            formatted: formattedOverlays,
-                            note: note ?? undefined
-                          }, null, 2)}`;
-                        } else {
-                          overlaysStatus = "no_data";
-                          overlaysMessage = "No special overlays, specific plans, or hazard zones found for this parcel.";
-                          toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-                            status: "no_data",
-                            jurisdiction: detectedJurisdiction,
-                            city: cityName,
-                            message: overlaysMessage,
-                            viewer: "viewer" in provider ? provider.viewer : null
-                          }, null, 2)}`;
-                        }
-                      } catch (e) {
-                        overlaysStatus = "error";
-                        overlaysMessage = `Error retrieving overlays. Try again or check the city's GIS viewer.`;
+                  if (provider?.method === "arcgis_query" && provider.overlays?.length) {
+                    if (overlaysResult.status === "fulfilled" && overlaysResult.value) {
+                      const oData = overlaysResult.value as any;
+                      if (oData.overlays && oData.overlays.length > 0) {
+                        overlaysStatus = "success";
+                        overlayCount = oData.overlays.length;
+                        const formattedOverlays = formatGroupedOverlays(oData.overlays, detectedJurisdiction!);
                         toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-                          status: "error",
+                          status: "success",
+                          formatted: formattedOverlays,
+                        }, null, 2)}`;
+                      } else {
+                        overlaysStatus = "no_data";
+                        overlaysMessage = "No special overlays found for this parcel.";
+                        toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
+                          status: "no_data",
                           jurisdiction: detectedJurisdiction,
-                          city: cityName,
                           message: overlaysMessage,
-                          viewer: "viewer" in provider ? provider.viewer : null
                         }, null, 2)}`;
                       }
-                    } else {
+                    } else if (overlaysResult.status === "rejected") {
                       overlaysStatus = "error";
-                      overlaysMessage = "Could not compute parcel location for overlay lookup.";
+                      overlaysMessage = `Error retrieving overlays.`;
                       toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                         status: "error",
                         jurisdiction: detectedJurisdiction,
-                        city: cityName,
                         message: overlaysMessage,
-                        viewer: "viewer" in provider ? provider.viewer : null
                       }, null, 2)}`;
                     }
                   } else {
                     overlaysStatus = "not_configured";
-                    overlaysMessage = `Overlay lookup for ${cityName} is not yet configured. Use the city's official GIS viewer.`;
+                    overlaysMessage = `Overlay lookup for ${cityName} is not yet configured.`;
                     toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                       status: "not_configured",
                       jurisdiction: detectedJurisdiction,
-                      city: cityName,
                       message: overlaysMessage,
-                      viewer: provider && "viewer" in provider ? provider.viewer : null
                     }, null, 2)}`;
                   }
                 }
 
-                // --- ASSESSOR (still County-wide) ---
+                // Process assessor result
                 if (SHOW_ASSESSOR) {
-                  try {
-                    const a = await lookupAssessor(apn);
-                    if (a && (a.ain || a.situs || a.use)) {
+                  if (assessorResult.status === "fulfilled" && assessorResult.value) {
+                    const a = assessorResult.value as any;
+                    if (a.ain || a.situs || a.use) {
                       assessorStatus = "success";
                       toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                         status: "success",
@@ -670,16 +548,16 @@ export async function POST(request: NextRequest) {
                       }, null, 2)}`;
                     } else {
                       assessorStatus = "no_data";
-                      assessorMessage = "No assessor details found. The parcel may be new or records may not be digitized.";
+                      assessorMessage = "No assessor details found.";
                       toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                         status: "no_data",
                         message: assessorMessage,
                         links: a?.links
                       }, null, 2)}`;
                     }
-                  } catch (e) {
+                  } else if (assessorResult.status === "rejected") {
                     assessorStatus = "error";
-                    assessorMessage = "Error retrieving assessor data. Try the LA County Assessor portal directly.";
+                    assessorMessage = "Error retrieving assessor data.";
                     toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                       status: "error",
                       message: assessorMessage
@@ -688,35 +566,34 @@ export async function POST(request: NextRequest) {
                 }
 
               } else {
-                // --- COUNTY / UNINCORPORATED FLOW ---
-                
-                // FIX #19: For unincorporated areas, we'll get community name from assessor
-                // and update jurisdiction string to be more informative
+                // ─────────────────────────────────────────────
+                // COUNTY / UNINCORPORATED FLOW
+                // ─────────────────────────────────────────────
                 if (!detectedJurisdiction || detectedJurisdiction === "Unknown") {
                   detectedJurisdiction = "Unincorporated LA County";
                 }
                 
+                // FIX #29: Run ALL county queries in PARALLEL, pass parcel to avoid re-fetch
+                const dataTimer = createTimer('county_data_queries');
+                
                 const [zRes, aRes, oRes] = await Promise.allSettled([
-                  SHOW_ZONING   ? lookupZoning(apn)   : Promise.resolve(null),
-                  SHOW_ASSESSOR ? lookupAssessor(apn) : Promise.resolve(null),
-                  SHOW_OVERLAYS ? lookupOverlays(apn) : Promise.resolve(null),
+                  SHOW_ZONING   ? lookupZoning(apn, parcel)   : Promise.resolve(null),
+                  SHOW_ASSESSOR ? lookupAssessor(apn, parcel) : Promise.resolve(null),
+                  SHOW_OVERLAYS ? lookupOverlays(apn, parcel) : Promise.resolve(null),
                 ]);
+                
+                dataTimer.stopAndLog(log);
 
-                // FIX #19: Extract community name from assessor result if available
-                if (aRes.status === "fulfilled" && aRes.value?.city) {
-                  const assessorCity = aRes.value.city;
-                  // Only use if it's a real community name, not just "UNINCORPORATED"
-                  if (assessorCity && 
-                      assessorCity !== 'UNINCORPORATED' && 
-                      assessorCity !== 'UNINCORPORATED LA' &&
-                      !assessorCity.toLowerCase().includes('unincorporated')) {
+                // Extract community name from assessor
+                if (aRes.status === "fulfilled" && (aRes.value as any)?.city) {
+                  const assessorCity = (aRes.value as any).city;
+                  if (assessorCity && !assessorCity.toLowerCase().includes('unincorporated')) {
                     communityName = assessorCity;
-                    // Update jurisdiction to include community name
-                   const titleCaseCommunity = assessorCity  // Use assessorCity directly - already validated
-                    .split(' ')
-                    .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                    .join(' ')
-                    .replace(/ Ca$/i, '');
+                    const titleCaseCommunity = assessorCity
+                      .split(' ')
+                      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                      .join(' ')
+                      .replace(/ Ca$/i, '');
                     detectedJurisdiction = `Unincorporated LA County (${titleCaseCommunity})`;
                   }
                 }
@@ -724,27 +601,27 @@ export async function POST(request: NextRequest) {
                 // Handle zoning result
                 if (SHOW_ZONING) {
                   if (zRes.status === "fulfilled" && zRes.value) {
-                    if (zRes.value.zoning) {
+                    const zData = zRes.value as any;
+                    if (zData.zoning) {
                       zoningStatus = "success";
-                      const zoningWithJurisdiction = {
+                      toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
                         status: "success",
                         jurisdiction: detectedJurisdiction,
-                        ...zRes.value,
-                      };
-                      toolContext += `\n[TOOL:zoning]\n${JSON.stringify(zoningWithJurisdiction, null, 2)}`;
+                        ...zData,
+                      }, null, 2)}`;
                     } else {
                       zoningStatus = "no_data";
-                      zoningMessage = zRes.value.note || "No zoning data found for this parcel.";
+                      zoningMessage = zData.note || "No zoning data found for this parcel.";
                       toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
                         status: "no_data",
                         jurisdiction: detectedJurisdiction,
                         message: zoningMessage,
-                        links: zRes.value.links
+                        links: zData.links
                       }, null, 2)}`;
                     }
                   } else if (zRes.status === "rejected") {
                     zoningStatus = "error";
-                    zoningMessage = `Error retrieving zoning data. Try again later.`;
+                    zoningMessage = `Error retrieving zoning data.`;
                     toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
                       status: "error",
                       jurisdiction: detectedJurisdiction,
@@ -756,12 +633,11 @@ export async function POST(request: NextRequest) {
                 // Handle assessor result
                 if (SHOW_ASSESSOR) {
                   if (aRes.status === "fulfilled" && aRes.value) {
-                    if (aRes.value.ain || aRes.value.situs || aRes.value.use) {
+                    const aData = aRes.value as any;
+                    if (aData.ain || aData.situs || aData.use) {
                       assessorStatus = "success";
-                      // FIX #19: Rename "city" to "area" for unincorporated parcels
-                      const assessorData: Record<string, any> = { ...aRes.value };
+                      const assessorData: Record<string, any> = { ...aData };
                       if (communityName && assessorData.city) {
-                        // Add a clearer label - the city field becomes area/community
                         assessorData.area = assessorData.city;
                         delete assessorData.city;
                       }
@@ -775,12 +651,12 @@ export async function POST(request: NextRequest) {
                       toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                         status: "no_data",
                         message: assessorMessage,
-                        links: aRes.value.links
+                        links: aData.links
                       }, null, 2)}`;
                     }
                   } else if (aRes.status === "rejected") {
                     assessorStatus = "error";
-                    assessorMessage = `Error retrieving assessor data. Try the LA County Assessor portal.`;
+                    assessorMessage = `Error retrieving assessor data.`;
                     toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                       status: "error",
                       message: assessorMessage
@@ -791,28 +667,29 @@ export async function POST(request: NextRequest) {
                 // Handle overlays result
                 if (SHOW_OVERLAYS) {
                   if (oRes.status === "fulfilled" && oRes.value) {
-                    if (oRes.value.overlays && oRes.value.overlays.length > 0) {
+                    const oData = oRes.value as any;
+                    if (oData.overlays && oData.overlays.length > 0) {
                       overlaysStatus = "success";
-                      // Use pre-formatted grouped overlays
-                      const formattedOverlays = formatGroupedOverlays(oRes.value.overlays, detectedJurisdiction);
+                      overlayCount = oData.overlays.length;
+                      const formattedOverlays = formatGroupedOverlays(oData.overlays, detectedJurisdiction!);
                       toolContext += `\n[TOOL:overlays]\n${JSON.stringify({
                         status: "success",
                         formatted: formattedOverlays,
-                        links: oRes.value.links
+                        links: oData.links
                       }, null, 2)}`;
                     } else {
                       overlaysStatus = "no_data";
-                      overlaysMessage = "No special overlays, CSDs, SEAs, or hazard zones found for this parcel.";
+                      overlaysMessage = "No special overlays found for this parcel.";
                       toolContext += `\n[TOOL:overlays]\n${JSON.stringify({
                         status: "no_data",
                         jurisdiction: detectedJurisdiction,
                         message: overlaysMessage,
-                        links: oRes.value.links
+                        links: oData.links
                       }, null, 2)}`;
                     }
                   } else if (oRes.status === "rejected") {
                     overlaysStatus = "error";
-                    overlaysMessage = `Error retrieving overlays. Try again later.`;
+                    overlaysMessage = `Error retrieving overlays.`;
                     toolContext += `\n[TOOL:overlays]\n${JSON.stringify({
                       status: "error",
                       jurisdiction: detectedJurisdiction,
@@ -824,11 +701,10 @@ export async function POST(request: NextRequest) {
             }
           }
         } else if (address) {
-          // Address lookup not yet implemented
           zoningStatus = "not_implemented";
           overlaysStatus = "not_implemented";
           assessorStatus = "not_implemented";
-          const msg = "Address-to-parcel lookup is coming soon. For now, please provide an APN (e.g., 5843-004-015) which you can find on your property tax bill or at the LA County Assessor website.";
+          const msg = "Address-to-parcel lookup is coming soon. For now, please provide an APN (e.g., 5843-004-015).";
           zoningMessage = msg;
           overlaysMessage = msg;
           assessorMessage = msg;
@@ -838,7 +714,6 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch (e) {
-      // Unexpected error - mark all sections as error
       zoningStatus = "error";
       overlaysStatus = "error";
       assessorStatus = "error";
@@ -847,19 +722,19 @@ export async function POST(request: NextRequest) {
       overlaysMessage = errMsg;
       assessorMessage = errMsg;
       toolContext += `\n[TOOL_ERROR] ${errMsg}`;
+      log.error('CHAT', 'Unexpected error in data lookup', { error: String(e) });
     }
     
-    // Add section status summary for the LLM
     toolContext += `\n\n[SECTION_STATUS]
 ZONING_STATUS: ${zoningStatus}${zoningMessage ? `\nZONING_MESSAGE: ${zoningMessage}` : ''}
 OVERLAYS_STATUS: ${overlaysStatus}${overlaysMessage ? `\nOVERLAYS_MESSAGE: ${overlaysMessage}` : ''}
 ASSESSOR_STATUS: ${assessorStatus}${assessorMessage ? `\nASSESSOR_MESSAGE: ${assessorMessage}` : ''}`;
 
-    console.log("[CHAT] toolContext length:", toolContext.length);
+    log.log('CHAT', 'Tool context ready', { length: toolContext.length });
+    log.benchmark('tool_context_ready');
 
-    // --- Step 3: build prompts with tools first ---
-
-const systemPreamble = `
+    // --- Step 3: Build prompts ---
+    const systemPreamble = `
 You are LA-Fires Assistant.
 
 You answer for a single parcel at a time and you only use the TOOL OUTPUTS provided.
@@ -886,12 +761,10 @@ Check the [SECTION_STATUS] block for each section's status:
 IMPORTANT - JURISDICTION
 - The Zoning section MUST always include JURISDICTION as the first field.
 - Use the jurisdiction value from the tool outputs (e.g., "Los Angeles", "Pasadena", "Unincorporated LA County (Altadena)").
-- This tells the user which city or county rules apply to their parcel.
 
 CRITICAL - OVERLAYS SECTION
 - When the overlay tool output contains a "formatted" field, output its contents EXACTLY as provided.
 - Do not reformat, reorganize, or summarize the formatted overlays.
-- The formatted text already includes JURISDICTION, category headings, and bullet points.
 - Just copy the "formatted" field content directly after the "Overlays" heading.
 
 FIX #10 - EMPTY OVERLAY CATEGORIES
@@ -900,68 +773,55 @@ When showing overlays, ALWAYS include these three key categories even if they ha
 - HISTORIC PRESERVATION
 - LAND USE & PLANNING
 
-If a category has no results, show it with "None found for this parcel" like this:
-
-HAZARDS:
-  • None found for this parcel
-
-This helps users understand that the data was checked, not missing.
-
-FIX #16 - TITLE22 CODES
-Do NOT display raw TITLE22 codes like "DIV3ZO_CH22.18REZ0" - these are meaningless to users.
-Simply omit the TITLE22 field entirely from the output.
-
-FIX #19 - ASSESSOR AREA FIELD
-For unincorporated parcels, use "AREA" instead of "CITY" when displaying the community name.
-The tool output may include an "area" field instead of "city" for these parcels.
+If a category has no results, show it with "None found for this parcel".
 
 FORMAT
 - Structure your answer into up to three sections, in this order:
   Zoning
   Overlays
   Assessor
-- Put each section heading alone on its own line, exactly as written above.
+- Put each section heading alone on its own line.
 - For Zoning and Assessor, use KEY: VALUE lines.
 - For Overlays, copy the pre-formatted text exactly.
 - For the Zoning section, always start with JURISDICTION: <value>
 - Never include a section whose SHOW_* flag is false.
 `.trim();
 
-    
-const combinedPrompt = [
-  { role: "system", parts: [{ text: systemPreamble }] },
-  {
-    role: "user",
-    parts: [{
-      text:
-        `CONTROL FLAGS\n` +
-        `SHOW_ZONING: ${SHOW_ZONING}\n` +
-        `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
-        `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
-    }],
-  },
-  { role: "user", parts: [{ text: `Intent: ${intent}` }] },
-  {
-    role: "user",
-    parts: [{
-      text:
-        `=== TOOL OUTPUTS (authoritative) ===\n` +
-        `${toolContext || "(none)"}\n\n` +
-        `=== STATIC CONTEXT (supporting) ===\n` +
-        `${contextData}`.trim()
-    }],
-  },
-  { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
-];
+    const combinedPrompt = [
+      { role: "system", parts: [{ text: systemPreamble }] },
+      {
+        role: "user",
+        parts: [{
+          text:
+            `CONTROL FLAGS\n` +
+            `SHOW_ZONING: ${SHOW_ZONING}\n` +
+            `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
+            `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
+        }],
+      },
+      { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+      {
+        role: "user",
+        parts: [{
+          text:
+            `=== TOOL OUTPUTS (authoritative) ===\n` +
+            `${toolContext || "(none)"}\n\n` +
+            `=== STATIC CONTEXT (supporting) ===\n` +
+            `${contextData}`.trim()
+        }],
+      },
+      { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
+    ];
 
-
-    // --- Step 4: final model call via OpenRouter with fallback ---
+    // --- Step 4: LLM call ---
+    const llmTimer = createTimer('llm_call');
     let text = "";
     try {
       text = await orWithRetryAndFallback(combinedPrompt, request, 0.05);
     } catch {
       text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
     }
+    llmTimer.stopAndLog(log);
 
     // Defensive post-filter
     try {
@@ -978,37 +838,53 @@ const combinedPrompt = [
         if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
         if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
 
-        
         const cleanedLines = text
           .split(/\r?\n/)
           .filter(line => {
             if (!line.trim()) return true;
-            if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) {
-              return false;
-            }
-            // Also filter out status fields that might leak through
-            if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) {
-              return false;
-            }
-            // FIX #16: Filter out TITLE22 codes
-            if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) {
-              return false;
-            }
+            if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) return false;
+            if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) return false;
+            if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) return false;
             return true;
           });
 
         text = cleanedLines.join("\n").trim();
       }
     } catch (e) {
-      console.warn("[CHAT] post-filter failed:", e);
+      log.warn('CHAT', 'Post-filter failed', { error: String(e) });
     }
 
-    return NextResponse.json({ response: text, intent }, { status: 200 });
+    // FIX #31: Log metrics
+    const totalTime = log.elapsed();
+    log.log('CHAT', 'Request complete', { totalTime });
+    
+    logRequestMetrics({
+      requestId: log.getRequestId(),
+      apn: extractApn(lastUser),
+      jurisdiction: detectedJurisdiction || undefined,
+      totalTime,
+      cacheHits,
+      cacheMisses,
+      overlayCount,
+      benchmarks: log.getBenchmarks(),
+      timestamp: new Date().toISOString(),
+    });
+
+    return NextResponse.json(
+      { response: text, intent },
+      { 
+        status: 200,
+        headers: getRateLimitHeaders(rateCheck)
+      }
+    );
   } catch (error: any) {
-    console.error("Error in chat API:", error);
+    log.error('CHAT', 'Fatal error', { error: String(error) });
     return NextResponse.json(
       { response: friendlyFallbackMessage(), intent: "" },
-      { status: 200 }
+      { 
+        status: 200,
+        headers: getRateLimitHeaders(rateCheck)
+      }
     );
   }
 }
