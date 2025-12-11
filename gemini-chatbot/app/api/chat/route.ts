@@ -1,3 +1,6 @@
+// app/api/chat/route.ts
+// Phase 5A: Standardized Zoning Fields Across Jurisdictions
+// Includes Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -457,6 +460,14 @@ export async function POST(request: NextRequest) {
                     if (zoningResult.status === "fulfilled" && zoningResult.value) {
                       const cityZ = zoningResult.value as any;
                       const hasZoningData = cityZ?.card?.raw && Object.keys(cityZ.card.raw).length > 0;
+                      
+                      // DEBUG: Log raw zoning data from city endpoint
+                      log.log('ZONING', 'City zoning raw data', {
+                        city: cityName,
+                        hasData: hasZoningData,
+                        fields: hasZoningData ? Object.keys(cityZ.card.raw) : [],
+                        sample: hasZoningData ? JSON.stringify(cityZ.card.raw).slice(0, 500) : 'none'
+                      });
                       
                       if (hasZoningData) {
                         zoningStatus = "success";
