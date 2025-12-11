@@ -1,3 +1,6 @@
+// lib/la/fieldNormalizer.ts
+// Phase 5A: Standardize Zoning Card Fields Across Jurisdictions
+// Fixes #32, #33, #34
 
 /* -------------------------------------------------------------------------- */
 /*                            NORMALIZED INTERFACES                           */
@@ -24,9 +27,15 @@ export interface NormalizedZoning {
 
 // Zone code fields - the actual zone designation (R-1, RS-4, etc.)
 const ZONE_CODE_FIELDS = [
+  // Standard variations
   'ZONE_CODE', 'ZONE', 'ZONE_SYMBOL', 'ZONE_', 'ZONING',
   'ZoneCode', 'Zone', 'PLAN_LEG_ZONE', 'Z_CODE', 'ZONECODE',
   'zone_code', 'zone', 'zoning',
+  // LA City specific variations
+  'ZONE_SMBL', 'ZONE_CLASS', 'ZONE_CLAS', 'ZONING_CODE',
+  'ZONE_NAME', 'ZN_CODE', 'ZN', 'ZONE_TYPE',
+  // More variations for different ArcGIS configurations
+  'Q', 'HEIGHT_DIST', 'SPEC_COND',
 ];
 
 // Zone description fields - human-readable zone name
@@ -82,29 +91,25 @@ const GEN_CODE_FIELDS = [
 
 /**
  * Find the first non-empty value from a list of possible field names.
- * Case-insensitive matching with multiple fallback strategies.
+ * Case-insensitive matching against actual data keys.
  */
 function findField(data: RawZoningData, fieldList: string[]): string | null {
   if (!data) return null;
   
+  // Get all keys from the data for case-insensitive comparison
+  const dataKeys = Object.keys(data);
+  const dataKeyMap = new Map<string, string>();
+  for (const key of dataKeys) {
+    dataKeyMap.set(key.toLowerCase(), key);
+  }
+  
   for (const field of fieldList) {
-    // Try exact match
-    if (field in data) {
-      const val = data[field];
-      if (isValidValue(val)) return String(val).trim();
-    }
+    const fieldLower = field.toLowerCase();
     
-    // Try lowercase match
-    const lowerField = field.toLowerCase();
-    if (lowerField in data) {
-      const val = data[lowerField];
-      if (isValidValue(val)) return String(val).trim();
-    }
-    
-    // Try uppercase match
-    const upperField = field.toUpperCase();
-    if (upperField in data) {
-      const val = data[upperField];
+    // Check if any data key matches case-insensitively
+    const actualKey = dataKeyMap.get(fieldLower);
+    if (actualKey) {
+      const val = data[actualKey];
       if (isValidValue(val)) return String(val).trim();
     }
   }
@@ -209,7 +214,19 @@ export function normalizeZoningData(
   // ─────────────────────────────────────────────────────────────────────────
   // ZONE CODE: The actual zoning designation (R-1, RS-4, R1-1VL, etc.)
   // ─────────────────────────────────────────────────────────────────────────
+  
+  // Debug: Always log available fields for city zoning to diagnose issues
+  const availableFields = Object.keys(raw);
+  console.log('[ZONING_NORMALIZER] Jurisdiction:', jurisdiction, 'Available fields:', availableFields.join(', '));
+  
   let zone = findField(raw, ZONE_CODE_FIELDS);
+  
+  // Debug: Log if zone code not found
+  if (!zone) {
+    console.log('[ZONING_NORMALIZER] Zone code NOT FOUND. Raw data sample:', JSON.stringify(raw).slice(0, 800));
+  } else {
+    console.log('[ZONING_NORMALIZER] Zone code found:', zone);
+  }
   
   // ─────────────────────────────────────────────────────────────────────────
   // ZONE DESCRIPTION: Human-readable zone name
