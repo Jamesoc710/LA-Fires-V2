@@ -1,6 +1,3 @@
-// app/api/chat/route.ts
-// Phase 5A: Standardized Zoning Fields Across Jurisdictions
-// Includes Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -309,23 +306,31 @@ function friendlyFallbackMessage() {
 /* --------------------------------- POST -------------------------------- */
 
 export async function POST(request: NextRequest) {
+  // Create request logger
+  const log = createRequestLogger();
+  log.log('CHAT', 'Request started');
+  
   // Rate limiting check
-  const clientId = getClientIdentifier(request);
-  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.REQUESTS_PER_MINUTE);
+  const clientId = getClientIdentifier(request.headers);
+  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.chat.maxRequests, RATE_LIMITS.chat.windowMs);
   
   if (!rateCheck.allowed) {
+    log.warn('RATELIMIT', 'Rate limit exceeded', { clientId, resetIn: rateCheck.resetIn });
     return NextResponse.json(
-      { error: "Rate limit exceeded. Please wait before making more requests." },
+      { 
+        error: 'Rate limit exceeded',
+        message: `Too many requests. Please wait ${Math.ceil(rateCheck.resetIn / 1000)} seconds.`,
+        retryAfter: Math.ceil(rateCheck.resetIn / 1000)
+      },
       { 
         status: 429,
-        headers: getRateLimitHeaders(rateCheck)
+        headers: {
+          'Retry-After': String(Math.ceil(rateCheck.resetIn / 1000)),
+          ...getRateLimitHeaders(rateCheck)
+        }
       }
     );
   }
-
-  // Create request logger
-  const log = createRequestLogger();
-  log.log('CHAT', 'Request started', { clientId: clientId.slice(0, 8) + '...' });
 
   let detectedJurisdiction: string | null = null;
   let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
