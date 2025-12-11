@@ -1,11 +1,12 @@
 // lib/la/endpoints.ts
 // Central registry for LA County endpoints + viewer links (env-driven).
+// Phase 5B: Added FIX #41 - AIN validation and formatting functions
 
 type EndpointMap = Readonly<{
   ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
   GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
   ASSESSOR_PARCEL_QUERY: string;  // Assessor attrs (same parcel service is fine)
-  JURISDICTION_QUERY?: string;    // <-- NEW: City boundaries (Jurisdiction layer)
+  JURISDICTION_QUERY?: string;    // City boundaries (Jurisdiction layer)
   ZNET_VIEWER: string;
   GISNET_VIEWER: string;
   TITLE_22: string;
@@ -99,8 +100,48 @@ export function assertCoreEndpoints() {
 // Viewer URLs for client-side use
 export const znetViewerUrl = ENDPOINTS.ZNET_VIEWER;
 export const gisnetViewerUrl = ENDPOINTS.GISNET_VIEWER;
-export const assessorParcelUrl = (ain: string) =>
-  `https://portal.assessor.lacounty.gov/parceldetail/${ain.replace(/\D/g, "")}`;
+
+// FIX #41: Robust AIN validation and URL generation
+/**
+ * Generate assessor portal URL with proper AIN validation.
+ * Normalizes AIN to 10 digits and falls back to search page if invalid.
+ */
+export function assessorParcelUrl(ain: string): string {
+  // Normalize AIN to 10 digits only
+  const normalized = ain.replace(/\D/g, '');
+  
+  if (normalized.length !== 10) {
+    console.warn(`[ENDPOINTS] Invalid AIN format: ${ain} → ${normalized} (expected 10 digits)`);
+    // Return search page as fallback
+    return 'https://portal.assessor.lacounty.gov/';
+  }
+  
+  return `https://portal.assessor.lacounty.gov/parceldetail/${normalized}`;
+}
+
+// FIX #41: Format AIN for display (with dashes)
+/**
+ * Format AIN for human-readable display (XXXX-XXX-XXX format).
+ */
+export function formatAIN(ain: string): string {
+  const digits = ain.replace(/\D/g, '');
+  if (digits.length === 10) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return ain;
+}
+
+// FIX #41: Format APN for display (same format as AIN)
+/**
+ * Format APN for human-readable display (XXXX-XXX-XXX format).
+ */
+export function formatAPN(apn: string): string {
+  const digits = apn.replace(/\D/g, '');
+  if (digits.length === 10) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return apn;
+}
 
 // FIX #5: City-specific viewer URLs
 export const zimasViewerUrl = "https://zimas.lacity.org/";
