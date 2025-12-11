@@ -157,6 +157,14 @@ function firstFieldValue(a: any, csv?: string) {
   return null;
 }
 
+// WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
+function wmToWgs84(point102100: { x: number; y: number }) {
+  const R = 6378137;
+  const lon = (point102100.x / R) * 180 / Math.PI;
+  const lat = (2 * Math.atan(Math.exp(point102100.y / R)) - Math.PI / 2) * 180 / Math.PI;
+  return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
+}
+
 /* ========================== ATTRIBUTE SANITIZATION ========================== */
 
 const OVERLAY_FIELD_BLACKLIST = new Set([
@@ -174,6 +182,45 @@ const OVERLAY_FIELD_BLACKLIST = new Set([
   'created_date', 'last_edited_date', 'created_user', 'last_edited_user',
   'LANDMARK_TREE',
 ]);
+
+/**
+ * Fields we actively WANT to show - these provide value to architects/homeowners.
+ * Used to prioritize display order when multiple fields exist.
+ */
+const OVERLAY_FIELD_PRIORITY = [
+  // Fire hazard - CRITICAL for rebuild
+  'HAZ_CLASS', 'HAZ_CODE', 'FIRE_REVIEW_DISTRICT', 'GENERALIZE',
+  
+  // Names and labels - primary identifiers
+  'NAME', 'TITLE', 'LABEL', 'DISTRICT', 
+  'HPOZ_NAME', 'CSD_NAME', 'SEA_NAME', 'CPIO_NAME',
+  'PLAN_NAME', 'SPEC_PLAN', 'SPECIFIC_PLAN', 'OVERLAY_NAME', 'SPA_NM',
+  
+  // Descriptions
+  'DESCRIPTIO', 'DESCRIPTION', 'NOTES', 'TYPE', 'CATEGORY',
+  'OVERLAY_DESC', 'GEN_PLAN_DESC',
+  
+  // Plan/designation info - important for understanding development potential
+  'GPLU_DESC', 'LU_LABEL', 'LAND_USE', 'GP_DESIG', 'GEN_PLAN_USE_DESCRIPTION',
+  'PLAN_LEG', 'PLAN', 'CPA', 'COMM_NAME',
+  'LU_TYPE', 'ZONE', 'ZONE_CODE',
+  
+  // Hillside - important for rebuild constraints
+  'STATUS', 'SLOPE', 'HILLSIDE',
+  
+  // Historic - important for design review requirements
+  'HISTORIC_NAME', 'DESIGNATION', 'MONUMENT_TYP', 'DISTRICT_TYPE',
+  'NATIONAL_REGISTER_DISTRICT', 'NATIONAL_REGISTER_PROPERTY',
+  
+  // Administrative
+  'ADOPTED', 'EFFECTIVE', 'ORDINANCE',
+  
+  // SEA (Significant Ecological Area)
+  'SEA_TYPE', 'IMPLEMENTATION',
+  
+  // Flood
+  'FLOOD_ZONE', 'FLD_ZONE', 'ZONE_SUBTY',
+];
 
 function sanitizeOverlayAttributes(raw: Record<string, any> | null | undefined): Record<string, any> {
   if (!raw) return {};
@@ -461,6 +508,10 @@ async function queryOverlayBatch(
   const promises = queries.map(async (q) => {
     try {
       const r = await esriQuery(q.url, q.params);
+      const featCount = r?.features?.length ?? 0;
+      const layerInfo = q.layer ? `${q.label}/${q.layer}` : q.label;
+      console.log(`[OVERLAY_AUDIT] ${layerInfo}: ${featCount} features returned`);
+      
       const feat = r?.features?.[0]?.attributes;
       if (feat) {
         return {
@@ -531,6 +582,7 @@ export async function lookupCityOverlays(
   
   const queryTime = Date.now() - startTime;
   console.log(`[OVERLAY] All ${allQueries.length} queries complete in ${queryTime}ms (avg ${Math.round(queryTime / allQueries.length)}ms each)`);
+  console.log(`[OVERLAY_AUDIT] Total hits before dedup: ${results.length}`);
   
   // Dedupe overlays
   const dedupMap = new Map<string, OverlayHit>();
@@ -542,6 +594,7 @@ export async function lookupCityOverlays(
     }
   }
   const dedupedHits = Array.from(dedupMap.values());
+  console.log(`[OVERLAY_AUDIT] After dedup: ${dedupedHits.length} unique hits`);
 
   // Map to OverlayCard with sanitized attributes
   const mapped = dedupedHits.map((hit): OverlayCard | null => {
@@ -644,6 +697,11 @@ export async function lookupCityOverlays(
     // Specific Plan Areas
     if (lowerLabel.includes("specific plan")) {
       const planName = rawFeat.SPA_NM ?? rawFeat.SPEC_PLAN ?? rawFeat.PLAN_NAME ?? rawFeat.NAME ?? rawFeat.TITLE ?? rawFeat.SpecPlan ?? rawFeat.PlanName ?? rawFeat.SP_NAME ?? rawFeat.SPECIFICPLAN ?? summary ?? null;
+      
+      // Debug logging to see what fields are available
+      console.log("[OVERLAY_AUDIT] Specific Plan raw fields:", Object.keys(rawFeat).join(", "));
+      console.log("[OVERLAY_AUDIT] Specific Plan extracted name:", planName);
+      
       const displayName = planName ? `Specific Plan: ${planName}` : "Specific Plan Area";
       return { ...base, program: "Other", name: displayName, details: rawFeat.DESCRIPTIO ?? rawFeat.PLAN_TYPE ?? rawFeat.PLAN_AREA ?? undefined };
     }
@@ -652,6 +710,9 @@ export async function lookupCityOverlays(
   });
 
   const overlays: OverlayCard[] = mapped.filter((card): card is OverlayCard => card !== null);
+
+  console.log(`[OVERLAY_AUDIT] Summary: ${results.length} total hits, ${dedupedHits.length} after dedup, ${overlays.length} cards created from ${allQueries.length} layer queries`);
+  console.log(`[OVERLAY_AUDIT] Final overlays array: ${overlays.length} cards`);
 
   return { 
     overlays,
@@ -666,9 +727,15 @@ export async function lookupZoning(id: string, parcelData?: any) {
   if (!endpoints.gisnetParcelQuery) {
     throw new Error("Missing GISNET_PARCEL_QUERY endpoint (Preview)");
   }
+  console.log("[ZONING] endpoint:", endpoints.gisnetParcelQuery);
 
   // FIX #26: Use provided parcel data or fetch if not provided
   const parcel = parcelData ?? await getParcelByAINorAPN(id);
+  console.log(
+    "[ZONING] parcel geometry?",
+    !!parcel?.geometry,
+    parcel?.geometry ? JSON.stringify(parcel.geometry).length : 0
+  );
 
   if (!parcel?.geometry) {
     return {
@@ -706,13 +773,15 @@ export async function lookupZoning(id: string, parcelData?: any) {
           description: a1.Z_DESC ?? null,
           category: a1.Z_CATEGORY ?? null,
           planningArea: a1.PLNG_AREA ?? null,
+          // FIX #16: Don't include raw TITLE22 code - it's meaningless to users
+          // title22: a1.TITLE_22 ?? null,
         },
         links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
         method: "polygon",
       };
     }
   } catch (e) {
-    console.log("[ZONING] polygon query failed -> envelope fallback");
+    console.log("[ZONING] polygon query failed -> envelope fallback", String(e));
   }
 
   // Attempt 2: envelope
@@ -737,7 +806,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
         };
       }
     } catch (e) {
-      console.log("[ZONING] envelope query failed -> centroid fallback");
+      console.log("[ZONING] envelope query failed -> centroid fallback", String(e));
     }
   }
 
@@ -763,7 +832,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
         };
       }
     } catch (e) {
-      console.log("[ZONING] centroid query failed");
+      console.log("[ZONING] centroid query failed", String(e));
     }
   }
 
@@ -833,6 +902,8 @@ export async function lookupOverlays(
             geometry: JSON.stringify(q.centroid),
             geometryType: "esriGeometryPoint",
           });
+          const featCount = r1.features?.length ?? 0;
+          console.log(`[OVERLAY_AUDIT] ${q.url.slice(-50)}: ${featCount} features`);
           attrs = r1.features?.[0]?.attributes ?? null;
         }
 
@@ -843,6 +914,8 @@ export async function lookupOverlays(
             geometry: JSON.stringify(q.envelope),
             geometryType: "esriGeometryEnvelope",
           });
+          const featCount = r2.features?.length ?? 0;
+          console.log(`[OVERLAY_AUDIT] ${q.url.slice(-50)}: ${featCount} features (envelope)`);
           attrs = r2.features?.[0]?.attributes ?? null;
         }
 
@@ -894,7 +967,7 @@ export async function lookupOverlays(
           attributes: cleanAttrs,
         };
       } catch (e) {
-        console.log(`[OVERLAYS] query failed for ${q.url}`, String(e).slice(0, 100));
+        console.log(`[OVERLAYS] query failed for ${q.url.slice(-50)}`, String(e).slice(0, 100));
         return null;
       }
     });
@@ -917,9 +990,12 @@ export async function lookupOverlays(
     }
   }
 
+  const finalOverlays = Array.from(dedupMap.values());
+  console.log(`[OVERLAY_AUDIT] County summary: ${results.length} hits, ${finalOverlays.length} after dedup from ${overlayUrls.length} endpoints`);
+
   return {
     input: { apn },
-    overlays: Array.from(dedupMap.values()),
+    overlays: finalOverlays,
     links: { znet: endpoints.znetViewer },
   };
 }
@@ -958,7 +1034,7 @@ export async function lookupAssessor(id: string, parcelData?: any) {
   let r: any;
   try {
     r = await esriQuery(endpoints.assessorParcelQuery, {
-      returnGeometry: "true",
+      returnGeometry: "true",  // FIX #6: Request geometry to compute area as fallback
       where,
       outFields: "*",
     });
@@ -975,6 +1051,9 @@ export async function lookupAssessor(id: string, parcelData?: any) {
   if (!a) {
     return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
   }
+
+  // FIX #6: Log all available field names for debugging
+  console.log("[ASSESSOR] Available fields:", Object.keys(a).join(", "));
 
   const get = (k: string) => (k in a ? a[k] : null);
 
@@ -995,7 +1074,7 @@ export async function lookupAssessor(id: string, parcelData?: any) {
     .filter(n => !Number.isNaN(n));
   const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
 
-  // Lot size lookup
+  // FIX #6: Expanded field name search for lot size
   const lotSizeFieldNames = [
     "LotArea", "LOT_AREA", "LOT_SQFT", "LotSqFt", "LOTSQFT",
     "LandArea", "LAND_AREA", "LandSqFt", "LAND_SQFT",
@@ -1011,9 +1090,11 @@ export async function lookupAssessor(id: string, parcelData?: any) {
       if (fieldName.toLowerCase().includes("shape")) {
         if (val < 100000) {
           lotSqft = Math.round(val * 10.7639);
+          console.log(`[ASSESSOR] Using ${fieldName} (converted from sq m): ${lotSqft} sq ft`);
         }
       } else {
         lotSqft = val;
+        console.log(`[ASSESSOR] Found lot size in ${fieldName}: ${lotSqft}`);
       }
       break;
     }
