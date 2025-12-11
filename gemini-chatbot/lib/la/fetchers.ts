@@ -525,19 +525,23 @@ function isGenericHistoricPropertiesHit(rawFeat: Record<string, any>, label: str
 export async function lookupCityOverlays(
   centroid102100: ArcgisPoint102100,
   bundles: OverlayBundle[]
-): Promise<{ overlays: OverlayCard[]; note?: string }> {
+): Promise<{ overlays: OverlayCard[]; note?: string; audit?: { layersQueried: number; cardsCreated: number } }> {
   const results: OverlayHit[] = [];
+  let layersQueried = 0;
 
   for (const b of bundles || []) {
     try {
       // Case A: explicit .../0/query style (HPOZ or single-layer URLs)
       if (!b.sublayers?.length) {
+        layersQueried++;
         const r = await esriQuery(b.url, {
           ...OVERLAY_BASE_PARAMS,
           outFields: b.outFields || "*",
           geometryType: "esriGeometryPoint",
           geometry: JSON.stringify(centroid102100),
         });
+        const featCount = r?.features?.length ?? 0;
+        console.log(`[OVERLAY_AUDIT] ${b.label}: ${featCount} features returned`);
         const feat = r?.features?.[0]?.attributes;
         if (feat) {
           results.push({
@@ -551,6 +555,7 @@ export async function lookupCityOverlays(
 
       // Case B: FeatureServer root + sublayer IDs (SUD bundle, Pasadena bundles, etc.)
       for (const id of b.sublayers) {
+        layersQueried++;
         const layerUrl = `${b.url.replace(/\/+$/,"")}/${id}/query`;
         const r = await esriQuery(layerUrl, {
           ...OVERLAY_BASE_PARAMS,
@@ -558,6 +563,8 @@ export async function lookupCityOverlays(
           geometryType: "esriGeometryPoint",
           geometry: JSON.stringify(centroid102100),
         });
+        const featCount = r?.features?.length ?? 0;
+        console.log(`[OVERLAY_AUDIT] ${b.label}/${id}: ${featCount} features returned`);
         const feat = r?.features?.[0]?.attributes;
         if (feat) {
           results.push({
@@ -850,7 +857,14 @@ export async function lookupCityOverlays(
     (card): card is OverlayCard => card !== null
   );
 
-  return { overlays };
+  console.log(`[OVERLAY_AUDIT] Summary: ${results.length} total features, ${overlays.length} cards created from ${layersQueried} layer queries`);
+  console.log(`[OVERLAY_AUDIT] After dedup: ${dedupedHits.length} unique hits`);
+  console.log(`[OVERLAY_AUDIT] Final overlays array: ${overlays.length} cards`);
+
+  return { 
+    overlays,
+    audit: { layersQueried, cardsCreated: overlays.length }
+  };
 }
 
 
