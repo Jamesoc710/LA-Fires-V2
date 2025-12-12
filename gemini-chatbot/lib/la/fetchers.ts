@@ -1074,30 +1074,57 @@ export async function lookupAssessor(id: string, parcelData?: any) {
     .filter(n => !Number.isNaN(n));
   const yearBuilt = yearBuiltVals.length ? Math.min(...yearBuiltVals) : null;
 
-  // FIX #6: Expanded field name search for lot size
+
   const lotSizeFieldNames = [
+    // Direct lot size fields (preferred - already in sq ft)
     "LotArea", "LOT_AREA", "LOT_SQFT", "LotSqFt", "LOTSQFT",
     "LandArea", "LAND_AREA", "LandSqFt", "LAND_SQFT",
     "LotSize", "LOT_SIZE", "ParcelArea", "PARCEL_AREA",
     "SqFtLand", "SQFT_LAND", "LotSquareFeet", "LOT_SQUARE_FEET",
+    // Geometry area fields (need conversion from sq meters to sq ft)
+    "Shape.STArea()",  // <-- KEY FIX: exact field name from LA County Assessor layer
+    "Shape.STArea",
     "Shape_Area", "SHAPE_AREA", "Shape__Area", "ShapeArea",
+    "STArea", "STAREA",
   ];
   
   let lotSqft: number | null = null;
   for (const fieldName of lotSizeFieldNames) {
     const val = Number(get(fieldName));
     if (val && val > 0) {
-      if (fieldName.toLowerCase().includes("shape")) {
-        if (val < 100000) {
+      // Check if this is a geometry-derived field (needs conversion from sq meters)
+      const isShapeField = fieldName.toLowerCase().includes("shape") || 
+                           fieldName.toLowerCase().includes("starea") ||
+                           fieldName.includes("STArea");
+      
+      if (isShapeField) {
+        // Web Mercator (EPSG:102100) returns area in square meters
+        // Convert to square feet: 1 sq m = 10.7639 sq ft
+        if (val > 0 && val < 1000000) {
           lotSqft = Math.round(val * 10.7639);
-          console.log(`[ASSESSOR] Using ${fieldName} (converted from sq m): ${lotSqft} sq ft`);
+          console.log(`[ASSESSOR] LOT SIZE: Using ${fieldName} → ${val.toLocaleString()} sq m → ${lotSqft.toLocaleString()} sq ft`);
+        } else {
+          console.log(`[ASSESSOR] LOT SIZE: Skipping ${fieldName} - value ${val} out of expected range`);
         }
       } else {
-        lotSqft = val;
-        console.log(`[ASSESSOR] Found lot size in ${fieldName}: ${lotSqft}`);
+        // Direct lot size field - assume already in sq ft
+        lotSqft = Math.round(val);
+        console.log(`[ASSESSOR] LOT SIZE: Found in ${fieldName}: ${lotSqft.toLocaleString()} sq ft`);
       }
-      break;
+      
+      if (lotSqft !== null) break;
     }
+  }
+  
+  // Debug: log if no lot size found
+  if (lotSqft === null) {
+    const areaFields = Object.keys(a).filter(k => 
+      k.toLowerCase().includes('area') || 
+      k.toLowerCase().includes('sqft') || 
+      k.toLowerCase().includes('shape') ||
+      k.includes('STArea')
+    );
+    console.log("[ASSESSOR] LOT SIZE: Not found. Potential fields:", areaFields.join(", ") || "(none)");
   }
 
   const units =
