@@ -310,6 +310,192 @@ export async function getParcelByAINorAPN(id: string, skipCache = false): Promis
   return feat ?? null;
 }
 
+
+/*                     PHASE 6B: ADDRESS-TO-APN LOOKUP                        */
+/* ========================================================================== */
+
+/**
+ * Result from address search - may return multiple matches
+ */
+export type AddressSearchResult = {
+  ain: string;
+  apn: string;
+  address: string;
+  city: string;
+  zip: string;
+};
+
+/**
+ * Normalize address for search - handles common variations
+ */
+function normalizeAddressForSearch(address: string): string {
+  return address
+    .toUpperCase()
+    .trim()
+    // Normalize common street type abbreviations
+    .replace(/\bSTREET\b/g, 'ST')
+    .replace(/\bAVENUE\b/g, 'AVE')
+    .replace(/\bBOULEVARD\b/g, 'BLVD')
+    .replace(/\bDRIVE\b/g, 'DR')
+    .replace(/\bLANE\b/g, 'LN')
+    .replace(/\bROAD\b/g, 'RD')
+    .replace(/\bCOURT\b/g, 'CT')
+    .replace(/\bCIRCLE\b/g, 'CIR')
+    .replace(/\bPLACE\b/g, 'PL')
+    .replace(/\bTERRACE\b/g, 'TER')
+    .replace(/\bPARKWAY\b/g, 'PKWY')
+    .replace(/\bHIGHWAY\b/g, 'HWY')
+    // Normalize directional prefixes
+    .replace(/\bNORTH\b/g, 'N')
+    .replace(/\bSOUTH\b/g, 'S')
+    .replace(/\bEAST\b/g, 'E')
+    .replace(/\bWEST\b/g, 'W')
+    // Collapse multiple spaces
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Escape single quotes for SQL WHERE clause
+ */
+function escapeSql(str: string): string {
+  return str.replace(/'/g, "''");
+}
+
+/**
+ * Search for parcels by street address.
+ * Returns up to maxResults matching parcels.
+ * 
+ * @param address - Street address to search (e.g., "3652 Monterosa Dr")
+ * @param city - Optional city name to narrow results (e.g., "Altadena")
+ * @param maxResults - Maximum number of results to return (default 10)
+ * @returns Object with results array and optional note
+ */
+export async function searchParcelsByAddress(
+  address: string,
+  city?: string,
+  maxResults: number = 10
+): Promise<{ results: AddressSearchResult[]; note?: string }> {
+  if (!endpoints.znetAddressSearch) {
+    throw new Error("Missing ZNET_ADDRESS_SEARCH endpoint");
+  }
+
+  const normalized = normalizeAddressForSearch(address);
+  
+  // Require minimum length for meaningful search
+  if (normalized.length < 5) {
+    return { 
+      results: [], 
+      note: "Address too short. Please enter at least a street number and name." 
+    };
+  }
+
+  console.log("[ADDRESS_SEARCH] Query:", normalized, city ? `(city: ${city})` : "");
+
+  // Build WHERE clause using LIKE for partial matching
+  // SitusAddress field contains the full street address
+  let where = `UPPER(SitusAddress) LIKE '%${escapeSql(normalized)}%'`;
+  
+  // If city provided, add city filter for more precise results
+  if (city) {
+    const normalizedCity = city.toUpperCase().trim();
+    where += ` AND UPPER(SitusCity) LIKE '%${escapeSql(normalizedCity)}%'`;
+  }
+
+  let r: any;
+  try {
+    r = await esriQuery(endpoints.znetAddressSearch, {
+      returnGeometry: "false",
+      where,
+      outFields: "AIN,APN,SitusAddress,SitusCity,SitusZIP",
+      resultRecordCount: String(maxResults),
+      orderByFields: "SitusAddress ASC",
+    });
+  } catch (e) {
+    console.error("[ADDRESS_SEARCH] Query failed:", String(e));
+    return { 
+      results: [], 
+      note: "Address search failed. Please try again or enter an APN directly." 
+    };
+  }
+
+  const features = r?.features ?? [];
+  console.log("[ADDRESS_SEARCH] Found", features.length, "results");
+
+  if (features.length === 0) {
+    return { 
+      results: [], 
+      note: "No parcels found matching that address. Check spelling or try using an APN." 
+    };
+  }
+
+  // Map features to result objects
+  const results: AddressSearchResult[] = features.map((f: any) => {
+    const a = f.attributes || {};
+    return {
+      ain: a.AIN ? String(a.AIN) : "",
+      apn: a.APN ? String(a.APN) : "",
+      address: a.SitusAddress || "",
+      city: a.SitusCity || "",
+      zip: a.SitusZIP || "",
+    };
+  }).filter((r: AddressSearchResult) => r.ain || r.apn); // Only include valid results
+
+  // Deduplicate by AIN (same parcel can appear multiple times)
+  const seen = new Set<string>();
+  const deduped = results.filter((r: AddressSearchResult) => {
+    const key = r.ain || r.apn;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  console.log("[ADDRESS_SEARCH] Returning", deduped.length, "unique results");
+
+  return { 
+    results: deduped,
+    note: deduped.length >= maxResults 
+      ? `Showing first ${maxResults} results. Add a city name to narrow your search.` 
+      : undefined
+  };
+}
+
+/**
+ * Detect whether user input looks like an address vs an APN/AIN.
+ * Used to decide whether to trigger address search.
+ * 
+ * @param input - User's raw input string
+ * @returns true if input appears to be a street address
+ */
+export function looksLikeAddress(input: string): boolean {
+  const trimmed = input.trim();
+  
+  // Check if it looks like an APN (9-10 digits with optional dashes/spaces)
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length >= 9 && digits.length <= 10) {
+    // If only digits, dashes, and spaces, it's probably an APN
+    const nonDigits = trimmed.replace(/[\d\s-]/g, "");
+    if (nonDigits.length === 0) {
+      return false; // It's an APN format
+    }
+  }
+  
+  // Check for common street type indicators
+  const streetIndicators = /\b(st|street|ave|avenue|blvd|boulevard|dr|drive|ln|lane|rd|road|ct|court|cir|circle|pl|place|ter|terrace|pkwy|parkway|hwy|highway|way)\b/i;
+  if (streetIndicators.test(trimmed)) {
+    return true;
+  }
+  
+  // Check for typical address pattern: number + street name
+  // e.g., "123 Main", "4567 Oak Street", "890 N First Ave"
+  const addressPattern = /^\d{1,5}\s+[a-zA-Z]/;
+  if (addressPattern.test(trimmed)) {
+    return true;
+  }
+  
+  return false;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                              JURISDICTION LOOKUP                           */
 /* -------------------------------------------------------------------------- */
