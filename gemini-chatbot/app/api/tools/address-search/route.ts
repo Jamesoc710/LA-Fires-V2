@@ -22,12 +22,7 @@ export async function POST(req: NextRequest) {
       10
     );
 
-    return NextResponse.json({ 
-      ok: true, 
-      results, 
-      note,
-      count: results.length 
-    });
+    return NextResponse.json({ ok: true, results, note, count: results.length });
   } catch (err: any) {
     console.error("[ADDRESS_SEARCH] Error:", err);
     return NextResponse.json(
