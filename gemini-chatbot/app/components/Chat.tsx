@@ -28,6 +28,15 @@ function downloadFile(filename: string, contents: string, mime = 'application/js
   URL.revokeObjectURL(url);
 }
 
+/* ------------ Phase 6B: Address Search Result Type ----------- */
+
+type AddressMatch = {
+  address: string;
+  city: string;
+  zip: string;
+  apn: string;
+};
+
 /* ------------ tiny utils to parse our assistant text into sections ----------- */
 
 type SectionData = Record<string, string>;
@@ -401,6 +410,7 @@ function formatFieldValue(key: string, value: string): string {
   
   return value;
 }
+
 // FIX #37: Data source mapping
 const DATA_SOURCES: Record<string, string> = {
   'Zoning': 'LA County GIS / City GIS',
@@ -620,11 +630,86 @@ function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }
     </div>
   );
 }
+
+/* -------------------------------- Phase 6B: Address Picker Component -------------------------------- */
+
+function AddressPicker({
+  results,
+  onSelect,
+  onCancel,
+}: {
+  results: AddressMatch[];
+  onSelect: (result: AddressMatch) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100 ring-1 ring-blue-200 dark:ring-blue-700 p-4 space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="flex-shrink-0">
+          <svg className="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h3 className="text-base font-semibold mb-1">Multiple Parcels Found</h3>
+          <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+            Select the correct property to continue:
+          </p>
+        </div>
+      </div>
+      
+      <div className="space-y-2 max-h-64 overflow-y-auto">
+        {results.map((r, idx) => (
+          <button
+            key={r.apn || idx}
+            onClick={() => onSelect(r)}
+            className="w-full text-left p-3 rounded-lg bg-white dark:bg-slate-700 
+                       hover:bg-blue-100 dark:hover:bg-slate-600 
+                       border border-blue-200 dark:border-slate-500 
+                       transition-colors group"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-700 dark:group-hover:text-blue-300">
+                  {r.address}
+                </div>
+                <div className="text-sm text-slate-500 dark:text-slate-400">
+                  {r.city}{r.zip ? `, ${r.zip}` : ''}
+                </div>
+              </div>
+              <div className="text-xs font-mono bg-slate-100 dark:bg-slate-600 px-2 py-1 rounded text-slate-600 dark:text-slate-300">
+                {formatApnDisplay(r.apn)}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+      
+      <button
+        onClick={onCancel}
+        className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 hover:underline"
+      >
+        ← Cancel and try a different address
+      </button>
+    </div>
+  );
+}
+
+// Helper to format APN for display (XXXX-XXX-XXX format)
+function formatApnDisplay(apn: string): string {
+  const digits = apn.replace(/\D/g, '');
+  if (digits.length === 10) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
+  }
+  return apn;
+}
+
 /* ----------------------------- Chat component ---------------------------- */
 
 export default function Chat() {
 const [messages, setMessages] = useState<Message[]>([
-  { role: 'assistant', content: "Hi there! I'm here to help you navigate Los Angeles building codes. What part of your project can I assist with today?" },
+  { role: 'assistant', content: "Hi there! I'm here to help you navigate Los Angeles building codes. Enter an APN (e.g., 5843-004-015) or a street address to get started." },
 ]);
 
 // rehydrate from localStorage on first mount
@@ -652,9 +737,10 @@ function clearChat() {
     {
       role: 'assistant',
       content:
-        "Hi there! I'm here to help you navigate Los Angeles building codes. What part of your project can I assist with today?",
+        "Hi there! I'm here to help you navigate Los Angeles building codes. Enter an APN (e.g., 5843-004-015) or a street address to get started.",
     },
   ]);
+  setAddressMatches(null);
   localStorage.removeItem('lafires.chat');
 }
 
@@ -664,13 +750,16 @@ function clearChat() {
   const [showRawForIndex, setShowRawForIndex] = useState<number | null>(null);
   // FIX #40: Track which section was just copied for visual feedback
   const [copiedSection, setCopiedSection] = useState<CopiedSection>(null);
+  // Phase 6B: Track address matches for picker UI
+  const [addressMatches, setAddressMatches] = useState<AddressMatch[] | null>(null);
+  const [originalQuery, setOriginalQuery] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
     "What's the zoning for APN 5843-004-015?",
-    "Show overlays only for AIN 5843004015",
+    "3652 Monterosa Dr Altadena",
+    "Show overlays for 2013 Lemoyne St",
     "Assessor details for APN 5843-003-012",
-    "Explain H5 plan designation",
   ];
 
   const scrollToBottom = () => {
@@ -679,7 +768,7 @@ function clearChat() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, addressMatches]);
 
   // FIX #40: Copy handler with visual feedback
   const handleCopy = (section: CopiedSection, text: string) => {
@@ -688,15 +777,71 @@ function clearChat() {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
+  // Phase 6B: Handle address selection from picker
+  const handleAddressSelect = async (result: AddressMatch) => {
+    setAddressMatches(null);
+    
+    // Build a new query with the resolved APN
+    const newQuery = `zoning overlays assessor for APN ${result.apn}`;
+    
+    // Add user message showing what they selected
+    const selectionMessage: Message = { 
+      role: 'user', 
+      content: `Selected: ${result.address} (APN ${formatApnDisplay(result.apn)})` 
+    };
+    setMessages(prev => [...prev, selectionMessage]);
+    
+    // Now submit the query with the APN
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [...messages, selectionMessage, { role: 'user', content: newQuery }] }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: data.response || 'Sorry, I could not generate a response.',
+        metadata: data.metadata,
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Phase 6B: Handle cancel address picker
+  const handleAddressCancel = () => {
+    setAddressMatches(null);
+    // Add a message indicating cancellation
+    const cancelMessage: Message = {
+      role: 'assistant',
+      content: 'Address selection cancelled. Try a different address or enter an APN directly (e.g., 5843-004-015).',
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: 'user', content: input.trim() };
     setMessages(prev => [...prev, userMessage]);
+    setOriginalQuery(input.trim());
     setInput('');
     setIsLoading(true);
     setError(null);
+    setAddressMatches(null);
 
     try {
       const response = await fetch('/api/chat', {
@@ -710,13 +855,25 @@ function clearChat() {
       }
 
       const data = await response.json();
-      // FIX #38: Capture metadata from response
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.response || 'Sorry, I could not generate a response.',
-        metadata: data.metadata,
-      };
-      setMessages(prev => [...prev, assistantMessage]);
+      
+      // Phase 6B: Check if this is an address picker response
+      if (data.addressMatches && data.addressMatches.length > 1) {
+        setAddressMatches(data.addressMatches);
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: data.response || `Found ${data.addressMatches.length} parcels matching that address.`,
+          metadata: data.metadata,
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+      } else {
+        // Normal response
+        const assistantMessage: Message = {
+          role: 'assistant',
+          content: data.response || 'Sorry, I could not generate a response.',
+          metadata: data.metadata,
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -801,46 +958,49 @@ function clearChat() {
       return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
     };
 
+  // FIX #9: Check for parcel not found error
+  if (parsed?.isParcelNotFound) {
+    return (
+      <div className="w-full max-w-[80%] space-y-3">
+        <ParcelNotFoundCard apn={parsed.apn} message={parsed.errorMessage} />
+      </div>
+    );
+  }
+
   return (
     <div className="w-full max-w-[80%] space-y-3">
-      {/* FIX #9: Show error card for parcel not found */}
-      {parsed?.isParcelNotFound && (
-        <ParcelNotFoundCard apn={parsed.apn} message={parsed.errorMessage} />
-      )}
-
       {/* header row: chips + viewer links + actions */}
       <div className="flex flex-wrap gap-2 items-center">
         {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
         {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
 
-        {/* viewer links */}
-        {/* FIX #41: Use formatAIN for tooltip */}
+        {/* FIX #4, #5: City-specific viewer link (e.g., ZIMAS for LA City) */}
+        {cityViewer && (
+          <a
+            href={cityViewer.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            title={`Open ${cityViewer.name}`}
+          >
+            {cityViewer.name} ↗
+          </a>
+        )}
+
+        {/* FIX #41: Assessor link with validated AIN */}
         {parsed?.ain && (
           <a
             href={assessorParcelUrl(parsed.ain)}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
-            title={`View parcel ${formatAIN(parsed.ain)} on Assessor Portal`}
+            title="Open Assessor Portal"
           >
             Assessor ↗
           </a>
         )}
         
-        {/* FIX #5: City-specific viewer link */}
-        {cityViewer && (
-          <a
-            href={cityViewer.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-100 px-2 py-0.5 text-xs font-medium hover:underline"
-            title={`Open ${cityViewer.name}`}
-          >
-            {cityViewer.name} ↗
-          </a>
-        )}
-        
-        {/* FIX #4: Only show ZNET/GISNET for unincorporated areas */}
+        {/* FIX #4: Only show ZNET/GISNET for unincorporated/county parcels */}
         {showCountyViewers && (
           <>
             <a
@@ -864,7 +1024,7 @@ function clearChat() {
           </>
         )}
 
-        {/* actions for this reply - FIX #40: Clearer button labels */}
+        {/* actions for this reply */}
         <div className="ml-auto flex gap-2">
           <button
             type="button"
@@ -1014,6 +1174,19 @@ return (
         </div>
       ))}
 
+      {/* Phase 6B: Address Picker UI */}
+      {addressMatches && addressMatches.length > 1 && (
+        <div className="flex justify-start">
+          <div className="w-full max-w-[80%]">
+            <AddressPicker
+              results={addressMatches}
+              onSelect={handleAddressSelect}
+              onCancel={handleAddressCancel}
+            />
+          </div>
+        </div>
+      )}
+
       {isLoading && (
         <div className="flex justify-start">
           <div className="max-w-[70%] rounded-lg p-3 bg-gray-200 text-gray-800">
@@ -1038,7 +1211,7 @@ return (
     </div>
 
     {/* suggestions row */}
-    <div className="px-4 pb-2 space-x-2">
+    <div className="px-4 pb-2 space-x-2 overflow-x-auto whitespace-nowrap">
       {suggestions.map(s => (
         <button
           key={s}
@@ -1088,7 +1261,7 @@ return (
           onKeyDown={handleKeyDown}
           onChange={e => setInput(e.target.value)}
           disabled={isLoading}
-          placeholder="Ask about zoning, assessor, overlays…"
+          placeholder="Enter APN (5843-004-015) or address (3652 Monterosa Dr)…"
           className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
         />
         <button
@@ -1100,7 +1273,7 @@ return (
         </button>
       </div>
       <p className="mt-1 text-[11px] text-slate-500">
-        Press Enter to send • Shift+Enter for a new line
+        Press Enter to send • Supports APN or street address
       </p>
     </form>
   </div>
