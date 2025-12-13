@@ -906,6 +906,213 @@ export async function lookupCityOverlays(
   };
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * PHASE 7B: UNIVERSAL HAZARD LAYERS (applies to ALL jurisdictions)
+ * These are state/federal regulatory layers, not local planning overlays:
+ * - Alquist-Priolo Fault Zones (California state-mandated)
+ * - Liquefaction Zones (California Geological Survey)
+ * - Landslide Zones (California Geological Survey)
+ * - Tsunami Inundation Zones (State/FEMA)
+ * - Coastal Zone (California Coastal Commission)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+export async function lookupUniversalHazards(
+  centroid: { x: number; y: number },
+  parcelGeometry: any
+): Promise<{ overlays: OverlayCard[]; note?: string }> {
+  const hazardEndpoints = endpoints.universalHazardQueries || [];
+  
+  if (hazardEndpoints.length === 0) {
+    console.log("[UNIVERSAL_HAZARDS] No hazard endpoints configured");
+    return { overlays: [] };
+  }
+
+  console.log(`[UNIVERSAL_HAZARDS] Querying ${hazardEndpoints.length} universal hazard layers`);
+
+  const base = {
+    returnGeometry: "false",
+    inSR: "102100",
+    outFields: "*",
+    spatialRel: "esriSpatialRelIntersects",
+  };
+
+  // Build queries for each hazard endpoint
+  const queries = hazardEndpoints.map((url) => ({
+    url,
+    label: inferUniversalHazardLabel(url),
+  }));
+
+  // Execute all queries in parallel
+  const startTime = Date.now();
+  const results = await Promise.allSettled(
+    queries.map(async (q) => {
+      // Try centroid first
+      const centroidGeom = JSON.stringify({ 
+        x: centroid.x, 
+        y: centroid.y, 
+        spatialReference: { wkid: 102100 } 
+      });
+      
+      try {
+        const r1 = await esriQuery(q.url, {
+          ...base,
+          geometry: centroidGeom,
+          geometryType: "esriGeometryPoint",
+        });
+        
+        const features = r1?.features || [];
+        console.log(`[UNIVERSAL_HAZARDS_AUDIT] ${q.label}: ${features.length} features`);
+        
+        if (features.length > 0) {
+          return { label: q.label, url: q.url, features };
+        }
+        
+        // Envelope fallback for edge cases
+        const envelope = makeEnvelopeFromGeom(parcelGeometry);
+        if (envelope) {
+          const r2 = await esriQuery(q.url, {
+            ...base,
+            geometry: JSON.stringify(envelope),
+            geometryType: "esriGeometryEnvelope",
+          });
+          const envFeatures = r2?.features || [];
+          console.log(`[UNIVERSAL_HAZARDS_AUDIT] ${q.label}: ${envFeatures.length} features (envelope)`);
+          if (envFeatures.length > 0) {
+            return { label: q.label, url: q.url, features: envFeatures };
+          }
+        }
+        
+        return null;
+      } catch (e) {
+        console.warn(`[UNIVERSAL_HAZARDS] Query failed for ${q.label}:`, e);
+        return null;
+      }
+    })
+  );
+
+  const elapsed = Date.now() - startTime;
+  console.log(`[UNIVERSAL_HAZARDS] ${hazardEndpoints.length} queries complete in ${elapsed}ms`);
+
+  // Process results into OverlayCards
+  const overlays: OverlayCard[] = [];
+  
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      const { label, url, features } = result.value;
+      
+      for (const feat of features) {
+        const card = createUniversalHazardCard(label, url, feat.attributes || {});
+        if (card) {
+          overlays.push(card);
+        }
+      }
+    }
+  }
+
+  // Deduplicate by normalized name
+  const seen = new Set<string>();
+  const dedupedOverlays = overlays.filter((card) => {
+    const key = card.name.toLowerCase().replace(/\s+/g, " ").trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  console.log(`[UNIVERSAL_HAZARDS_AUDIT] ${overlays.length} cards created, ${dedupedOverlays.length} after dedup`);
+
+  return { overlays: dedupedOverlays };
+}
+
+/**
+ * Infer a human-readable label from the hazard endpoint URL
+ */
+function inferUniversalHazardLabel(url: string): string {
+  const urlLower = url.toLowerCase();
+  
+  // LA County Hazards MapServer layers
+  if (urlLower.includes("/hazards/mapserver/5")) return "Fault Zone";
+  if (urlLower.includes("/hazards/mapserver/9")) return "Liquefaction Zone";
+  if (urlLower.includes("/hazards/mapserver/8")) return "Landslide Zone";
+  if (urlLower.includes("/hazards/mapserver/7")) return "Tsunami Zone";
+  
+  // CalTrans Coastal Zone
+  if (urlLower.includes("coastal_zone") || urlLower.includes("coastal")) return "Coastal Zone";
+  
+  return "Hazard Layer";
+}
+
+/**
+ * Create an OverlayCard for universal hazard features
+ */
+function createUniversalHazardCard(
+  label: string,
+  url: string,
+  attributes: Record<string, any>
+): OverlayCard | null {
+  const urlLower = url.toLowerCase();
+  
+  // Fault Zone (Alquist-Priolo)
+  if (label === "Fault Zone" || urlLower.includes("/hazards/mapserver/5")) {
+    const zoneType = attributes.ZONE_TYPE || attributes.CA_MAP_LEGEND || "Fault Zone";
+    const quadName = attributes.QUAD_NAME;
+    return {
+      source: "County",
+      program: "Other",
+      name: "Alquist-Priolo Fault Zone",
+      details: quadName ? `${zoneType} (${quadName})` : zoneType,
+      attributes,
+    };
+  }
+  
+  // Liquefaction Zone
+  if (label === "Liquefaction Zone" || urlLower.includes("/hazards/mapserver/9")) {
+    return {
+      source: "County",
+      program: "Other",
+      name: "Liquefaction Zone",
+      details: "Area susceptible to seismic liquefaction per California Geological Survey",
+      attributes,
+    };
+  }
+  
+  // Landslide Zone
+  if (label === "Landslide Zone" || urlLower.includes("/hazards/mapserver/8")) {
+    return {
+      source: "County",
+      program: "Other",
+      name: "Landslide Zone",
+      details: "Area susceptible to earthquake-induced landslides per California Geological Survey",
+      attributes,
+    };
+  }
+  
+  // Tsunami Inundation Zone
+  if (label === "Tsunami Zone" || urlLower.includes("/hazards/mapserver/7")) {
+    return {
+      source: "County",
+      program: "Other",
+      name: "Tsunami Inundation Zone",
+      details: "Within mapped tsunami inundation area",
+      attributes,
+    };
+  }
+  
+  // Coastal Zone
+  if (label === "Coastal Zone" || urlLower.includes("coastal")) {
+    const county = attributes.COUNTY || "Los Angeles";
+    return {
+      source: "County",
+      program: "Other",
+      name: "California Coastal Zone",
+      details: `Within California Coastal Commission jurisdiction (${county} County)`,
+      attributes,
+    };
+  }
+  
+  return null;
+}
+
+
 /* ------------------------ ZONING (parcel geom → zone) ------------------------ */
 /* FIX #26: Accept optional parcel data to avoid re-fetching */
 
