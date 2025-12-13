@@ -163,10 +163,17 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
   const details = (card.details || "").toLowerCase();
   const combined = `${name} ${details}`;
   
+  // SEA goes to Environmental Protection
   if (card.program === "SEA" || combined.includes("sea:") || combined.includes("sea ordinance") || combined.includes("significant ecological")) {
     return "Environmental Protection";
   }
   
+  // Phase 7: Coastal Zone goes to Environmental Protection (requires Coastal Commission permits)
+  if (combined.includes("coastal zone") || combined.includes("coastal commission") || combined.includes("coastal development")) {
+    return "Environmental Protection";
+  }
+  
+  // Hillside, ridgeline, grading -> Development Regulations
   if (combined.includes("hillside management") || combined.includes("hillside area") || 
       (combined.includes("hma") && !combined.includes("hazard")) ||
       combined.includes("ridgeline") || combined.includes("grading") ||
@@ -174,32 +181,39 @@ function categorizeOverlay(card: OverlayCard): OverlayCategory {
     return "Development Regulations";
   }
   
+  // Sign districts -> Development Regulations
   if (combined.includes("sign district") || combined.includes("sign_dist")) {
     return "Development Regulations";
   }
   
+  // Community Standards Districts
   if (card.program === "CSD" || combined.includes("csd") || combined.includes("community standards")) {
     return "Community Standards";
   }
   
+  // Hazards - including Phase 7 additions (fault, liquefaction, landslide, tsunami)
   if (combined.includes("fire") || combined.includes("hazard") || combined.includes("flood") ||
       combined.includes("fema") || combined.includes("sfha") || combined.includes("floodplain") ||
       combined.includes("floodway") || combined.includes("evacuation") || combined.includes("evac zone") ||
       combined.includes("ready set go") || combined.includes("landslide") || combined.includes("fault") ||
-      combined.includes("liquefaction") || combined.includes("tsunami") || combined.includes("seismic")) {
+      combined.includes("liquefaction") || combined.includes("tsunami") || combined.includes("seismic") ||
+      combined.includes("alquist-priolo") || combined.includes("inundation")) {
     return "Hazards";
   }
   
+  // Historic Preservation
   if (card.program === "HPOZ" || combined.includes("historic") || combined.includes("hpoz") ||
       combined.includes("landmark") || combined.includes("national register") ||
       combined.includes("monument") || combined.includes("hcm")) {
     return "Historic Preservation";
   }
   
+  // Supplemental Use Districts
   if (card.program === "SUD" || combined.includes("sud") || combined.includes("supplemental use")) {
     return "Supplemental Use Districts";
   }
   
+  // Land Use & Planning
   if (combined.includes("general plan") || combined.includes("specific plan") ||
       combined.includes("community plan") || combined.includes("transit") ||
       combined.includes("gplu") || combined.includes("land use") || combined.includes("cpa") ||
