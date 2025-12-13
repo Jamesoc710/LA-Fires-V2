@@ -1110,7 +1110,7 @@ export async function lookupOverlays(
         const cleanAttrs = sanitizeOverlayAttributes(attrs);
 
         // Normalize into OverlayCard
-        let program: OverlayProgram = "Other";
+      let program: OverlayProgram = "Other";
         if (attrs.CSD_NAME) program = "CSD";
 
         let name =
@@ -1124,6 +1124,14 @@ export async function lookupOverlays(
           "County overlay";
 
         let details: string | undefined = undefined;
+
+        // Detect layer type from URL patterns for Phase 7 layers
+        const urlLower = q.url.toLowerCase();
+        const isFaultZone = urlLower.includes("hazards/mapserver/5") || attrs.ZONE_TYPE?.includes("Fault");
+        const isLiquefactionZone = urlLower.includes("hazards/mapserver/9") || (attrs.ID !== undefined && urlLower.includes("liquefaction"));
+        const isLandslideZone = urlLower.includes("hazards/mapserver/8") || urlLower.includes("landslide");
+        const isTsunamiZone = urlLower.includes("hazards/mapserver/7") || urlLower.includes("tsunami");
+        const isCoastalZone = urlLower.includes("coastal_zone") || urlLower.includes("coastal-zone") || attrs.COUNTY !== undefined && urlLower.includes("coastal");
 
         if (attrs.Type) {
           details = attrs.Type;
@@ -1142,6 +1150,28 @@ export async function lookupOverlays(
           program = "Other";
         } else if (attrs.FLOOD_ZONE || attrs.FLD_ZONE) {
           name = `Flood Zone: ${attrs.FLOOD_ZONE || attrs.FLD_ZONE}`;
+          program = "Other";
+        }
+        // Phase 7: New hazard layer types
+        else if (isFaultZone) {
+          name = "Alquist-Priolo Fault Zone";
+          details = attrs.ZONE_TYPE ?? attrs.QUAD_NAME ?? "Earthquake fault zone - geotechnical study required";
+          program = "Other";
+        } else if (isLiquefactionZone) {
+          name = "Liquefaction Zone";
+          details = "Seismic hazard zone - soil stability investigation required";
+          program = "Other";
+        } else if (isLandslideZone) {
+          name = "Landslide Zone";
+          details = "Seismic hazard zone - slope stability investigation required";
+          program = "Other";
+        } else if (isTsunamiZone) {
+          name = "Tsunami Inundation Zone";
+          details = "Coastal hazard zone - evacuation planning required";
+          program = "Other";
+        } else if (isCoastalZone) {
+          name = "California Coastal Zone";
+          details = attrs.COUNTY ? `County: ${attrs.COUNTY}` : "Coastal Development Permit may be required";
           program = "Other";
         }
 
