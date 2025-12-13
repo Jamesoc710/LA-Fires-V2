@@ -1,3 +1,6 @@
+// app/api/chat/route.ts
+// Phase 6B: Address-to-APN Lookup Implementation
+// Includes Phase 5A Field Normalization, Phase 4 Performance Optimizations
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -47,19 +50,56 @@ function extractApn(s: string): string | undefined {
 }
 
 function extractAddress(s: string): string | undefined {
-  // Only return address if it looks like an address AND we didn't find an APN
-  if (looksLikeAddress(s)) {
-    // Extract the address portion - typically everything before keywords like "zoning", "overlays", etc.
-    const cleanedInput = s
-      .replace(/\b(zoning|overlays?|assessor|for|show|get|what'?s?|the|details?)\b/gi, '')
+  // Try to extract a street address from the user's input
+  // This handles queries like "zoning for 3652 Monterosa Dr Altadena"
+  
+  // Common street type suffixes
+  const streetTypes = '(?:st|street|ave|avenue|blvd|boulevard|dr|drive|ln|lane|rd|road|ct|court|cir|circle|pl|place|ter|terrace|pkwy|parkway|hwy|highway|way)';
+  
+  // Pattern: street number + street name words + street type + optional city/state/zip
+  // Examples: "3652 Monterosa Dr", "3652 Monterosa Drive Altadena", "123 N Main St Los Angeles CA"
+  const addressRegex = new RegExp(
+    `(\\d{1,5}\\s+` +                           // Street number (1-5 digits)
+    `(?:[NSEW]\\.?\\s+)?` +                     // Optional directional (N, S, E, W)
+    `[A-Za-z]+(?:\\s+[A-Za-z]+)*\\s+` +         // Street name (one or more words)
+    `${streetTypes}\\.?` +                      // Street type
+    `(?:\\s+[A-Za-z]+)*` +                      // Optional city name (one or more words)
+    `(?:\\s+(?:CA|California))?` +              // Optional state
+    `(?:\\s+\\d{5}(?:-\\d{4})?)?)`,             // Optional ZIP
+    'i'
+  );
+  
+  const match = s.match(addressRegex);
+  
+  if (match) {
+    let extracted = match[1].trim();
+    
+    // Clean up: remove any trailing command words that might have been captured
+    extracted = extracted
+      .replace(/\s+(?:zoning|overlays?|assessor|details?|info|information|data)$/gi, '')
       .trim();
     
-    // Check if we have a valid address pattern left
-    if (/^\d{1,5}\s+[a-zA-Z]/.test(cleanedInput)) {
-      return cleanedInput;
+    // Verify we still have something that looks like an address
+    if (/^\d{1,5}\s+[a-zA-Z]/.test(extracted)) {
+      console.log(`[ADDRESS_EXTRACT] Extracted "${extracted}" from "${s}"`);
+      return extracted;
     }
-    return s.trim();
   }
+  
+  // Fallback: If no match with street type, try simpler pattern for short inputs
+  // This handles cases like "2013 Lemoyne St" entered directly
+  if (/^\d{1,5}\s+[A-Za-z]/.test(s.trim()) && s.trim().split(/\s+/).length <= 6) {
+    // Short input that starts with street number - probably just an address
+    const cleaned = s.trim()
+      .replace(/\s+(?:zoning|overlays?|assessor|details?|info)$/gi, '')
+      .trim();
+    if (/^\d{1,5}\s+[a-zA-Z]/.test(cleaned)) {
+      console.log(`[ADDRESS_EXTRACT] Using direct input: "${cleaned}"`);
+      return cleaned;
+    }
+  }
+  
+  console.log(`[ADDRESS_EXTRACT] No address found in: "${s}"`);
   return undefined;
 }
 
