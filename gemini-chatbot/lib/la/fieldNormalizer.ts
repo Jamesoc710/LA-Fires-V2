@@ -343,7 +343,7 @@ export function formatZoningForContext(zoning: NormalizedZoning): string {
   
   // Community/Planning area - only if available
   if (isValidValue(zoning.communityPlanArea)) {
-    lines.push(`COMMUNITY/PLANNING AREA: ${zoning.communityPlanArea}`);
+    lines.push(`PLANNING AREA: ${zoning.communityPlanArea}`);
   }
   
   // Specific plan - only if available
@@ -383,7 +383,7 @@ export function createZoningCard(zoning: NormalizedZoning): Record<string, any> 
   }
   
   if (isValidValue(zoning.communityPlanArea)) {
-    card.communityPlanArea = zoning.communityPlanArea;
+    card.planningArea = zoning.communityPlanArea;
   }
   
   if (isValidValue(zoning.specificPlan)) {
