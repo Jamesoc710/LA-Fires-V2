@@ -1,6 +1,3 @@
-// app/api/chat/route.ts
-// Phase 5A: Standardized Zoning Fields Across Jurisdictions
-// Includes Phase 4 Performance Optimizations: Deduplication, Parallel Queries, Rate Limiting, Structured Logging
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -12,7 +9,10 @@ import {
   makeCentroidFromGeom,
   lookupJurisdictionPoint102100,
   lookupCityZoning,
-  lookupCityOverlays
+  lookupCityOverlays,
+  searchParcelsByAddress,
+  looksLikeAddress,
+  type AddressSearchResult,
 } from "@/lib/la/fetchers";
 import { getCityProvider, debugProvidersLog } from "@/lib/la/providers";
 import { createRequestLogger, logRequestMetrics, createTimer, type RequestLogger } from "@/lib/la/logger";
@@ -35,7 +35,8 @@ if (!OR_API_KEY) {
 
 function wantsParcelLookup(s: string) {
   const digits = s.replace(/\D/g, "");
-  return digits.length >= 9 || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s);
+  // Either has 9+ digits (APN), or contains parcel-related keywords, or looks like an address
+  return digits.length >= 9 || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s) || looksLikeAddress(s);
 }
 
 function extractApn(s: string): string | undefined {
@@ -46,7 +47,19 @@ function extractApn(s: string): string | undefined {
 }
 
 function extractAddress(s: string): string | undefined {
-  if (/\d{3,5}\s+\w+/.test(s || "")) return s.trim();
+  // Only return address if it looks like an address AND we didn't find an APN
+  if (looksLikeAddress(s)) {
+    // Extract the address portion - typically everything before keywords like "zoning", "overlays", etc.
+    const cleanedInput = s
+      .replace(/\b(zoning|overlays?|assessor|for|show|get|what'?s?|the|details?)\b/gi, '')
+      .trim();
+    
+    // Check if we have a valid address pattern left
+    if (/^\d{1,5}\s+[a-zA-Z]/.test(cleanedInput)) {
+      return cleanedInput;
+    }
+    return s.trim();
+  }
   return undefined;
 }
 
@@ -379,21 +392,113 @@ export async function POST(request: NextRequest) {
     // --- Step 2: live lookups (TOOL OUTPUTS) ---
     let toolContext = "";
     
-    type SectionStatus = "success" | "no_data" | "error" | "not_configured" | "not_implemented";
+    type SectionStatus = "success" | "no_data" | "error" | "not_configured" | "not_implemented" | "address_multiple";
     let zoningStatus: SectionStatus = "no_data";
     let overlaysStatus: SectionStatus = "no_data";
     let assessorStatus: SectionStatus = "no_data";
     let zoningMessage: string | null = null;
     let overlaysMessage: string | null = null;
     let assessorMessage: string | null = null;
+    
+    // Phase 6B: Track address search results for frontend picker
+    let addressSearchResults: AddressSearchResult[] | null = null;
+    let resolvedFromAddress: { address: string; apn: string } | null = null;
 
     try {
       if (wantsParcelLookup(lastUser)) {
-        const apn = extractApn(lastUser);
-        const address = extractAddress(lastUser);
+        let apn = extractApn(lastUser);
+        const address = !apn ? extractAddress(lastUser) : undefined;
 
+        // ─────────────────────────────────────────────────────────────────────
+        // PHASE 6B: ADDRESS-TO-APN LOOKUP
+        // ─────────────────────────────────────────────────────────────────────
+        if (!apn && address) {
+          log.log('ADDRESS_SEARCH', 'Starting address search', { address });
+          
+          try {
+            const { results, note } = await searchParcelsByAddress(address);
+            
+            if (results.length === 0) {
+              // No matches found
+              zoningStatus = "error";
+              overlaysStatus = "error";
+              assessorStatus = "error";
+              const msg = note || "No parcels found matching that address. Please check the spelling or provide an APN (e.g., 5843-004-015).";
+              zoningMessage = msg;
+              overlaysMessage = msg;
+              assessorMessage = msg;
+              toolContext += `\n[TOOL:address_search]\n${JSON.stringify({
+                status: "no_matches",
+                query: address,
+                message: msg,
+              }, null, 2)}`;
+              log.log('ADDRESS_SEARCH', 'No matches found', { address });
+              
+            } else if (results.length === 1) {
+              // Single match - use it automatically
+              const match = results[0];
+              apn = match.ain || match.apn;
+              resolvedFromAddress = { address: match.address, apn };
+              
+              log.log('ADDRESS_SEARCH', 'Single match found', { 
+                address: match.address, 
+                apn,
+                city: match.city
+              });
+              
+              toolContext += `\n[TOOL:address_resolved]\n${JSON.stringify({
+                status: "success",
+                query: address,
+                resolved: {
+                  address: match.address,
+                  city: match.city,
+                  apn: apn,
+                }
+              }, null, 2)}`;
+              
+            } else {
+              // Multiple matches - return them for user selection
+              addressSearchResults = results;
+              zoningStatus = "address_multiple";
+              overlaysStatus = "address_multiple";
+              assessorStatus = "address_multiple";
+              
+              log.log('ADDRESS_SEARCH', 'Multiple matches found', { 
+                address, 
+                count: results.length 
+              });
+              
+              toolContext += `\n[TOOL:address_multiple]\n${JSON.stringify({
+                status: "multiple_matches",
+                query: address,
+                count: results.length,
+                results: results.map(r => ({
+                  address: r.address,
+                  city: r.city,
+                  zip: r.zip,
+                  apn: r.ain || r.apn,
+                })),
+                note: "User must select one of these parcels to continue."
+              }, null, 2)}`;
+            }
+          } catch (e) {
+            zoningStatus = "error";
+            overlaysStatus = "error";
+            assessorStatus = "error";
+            const msg = `Address search failed: ${String(e)}. Please try again or provide an APN directly.`;
+            zoningMessage = msg;
+            overlaysMessage = msg;
+            assessorMessage = msg;
+            toolContext += `\n[TOOL_ERROR] ${msg}`;
+            log.error('ADDRESS_SEARCH', 'Search failed', { error: String(e) });
+          }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STANDARD APN LOOKUP (also runs if address resolved to single match)
+        // ─────────────────────────────────────────────────────────────────────
         if (apn) {
-          log.log('CHAT', 'APN extracted', { apn });
+          log.log('CHAT', 'APN extracted', { apn, resolvedFromAddress: !!resolvedFromAddress });
           
           // Get parcel data once (FIX #26 deduplication)
           const parcelTimer = createTimer('parcel_lookup');
@@ -461,18 +566,15 @@ export async function POST(request: NextRequest) {
                       const cityZ = zoningResult.value as any;
                       const hasZoningData = cityZ?.card?.raw && Object.keys(cityZ.card.raw).length > 0;
                       
-                      // DEBUG: Log raw zoning data from city endpoint
                       log.log('ZONING', 'City zoning raw data', {
                         city: cityName,
                         hasData: hasZoningData,
                         fields: hasZoningData ? Object.keys(cityZ.card.raw) : [],
-                        sample: hasZoningData ? JSON.stringify(cityZ.card.raw).slice(0, 500) : 'none'
                       });
                       
                       if (hasZoningData) {
                         zoningStatus = "success";
                         
-                        // FIX #32, #33, #34: Normalize zoning data
                         const normalized = normalizeZoningData(cityZ.card.raw, detectedJurisdiction!);
                         const formattedZoning = formatZoningForContext(normalized);
                         
@@ -589,7 +691,7 @@ export async function POST(request: NextRequest) {
                   detectedJurisdiction = "Unincorporated LA County";
                 }
                 
-                // FIX #29: Run ALL county queries in PARALLEL, pass parcel to avoid re-fetch
+                // FIX #29: Run ALL county queries in PARALLEL
                 const dataTimer = createTimer('county_data_queries');
                 
                 const [zRes, aRes, oRes] = await Promise.allSettled([
@@ -600,20 +702,6 @@ export async function POST(request: NextRequest) {
                 
                 dataTimer.stopAndLog(log);
 
-                // Extract community name from assessor
-                if (aRes.status === "fulfilled" && (aRes.value as any)?.city) {
-                  const assessorCity = (aRes.value as any).city;
-                  if (assessorCity && !assessorCity.toLowerCase().includes('unincorporated')) {
-                    communityName = assessorCity;
-                    const titleCaseCommunity = assessorCity
-                      .split(' ')
-                      .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                      .join(' ')
-                      .replace(/ Ca$/i, '');
-                    detectedJurisdiction = `Unincorporated LA County (${titleCaseCommunity})`;
-                  }
-                }
-
                 // Handle zoning result with NORMALIZATION (FIX #32, #33, #34)
                 if (SHOW_ZONING) {
                   if (zRes.status === "fulfilled" && zRes.value) {
@@ -621,20 +709,14 @@ export async function POST(request: NextRequest) {
                     if (zData.zoning) {
                       zoningStatus = "success";
                       
-                      // FIX #32, #33, #34: Build raw data object from county response
-                      const rawZoningData: Record<string, any> = {
-                        ZONE: zData.zoning,
-                        ...(zData.details || {}),
-                      };
-                      
-                      const normalized = normalizeZoningData(rawZoningData, detectedJurisdiction!);
+                      const normalized = normalizeZoningData(zData.zoning, detectedJurisdiction!);
                       const formattedZoning = formatZoningForContext(normalized);
                       
                       toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
                         status: "success",
                         formatted: formattedZoning,
                         card: createZoningCard(normalized),
-                        links: zData.links,
+                        links: zData.links
                       }, null, 2)}`;
                     } else {
                       zoningStatus = "no_data";
@@ -663,14 +745,9 @@ export async function POST(request: NextRequest) {
                     const aData = aRes.value as any;
                     if (aData.ain || aData.situs || aData.use) {
                       assessorStatus = "success";
-                      const assessorData: Record<string, any> = { ...aData };
-                      if (communityName && assessorData.city) {
-                        assessorData.area = assessorData.city;
-                        delete assessorData.city;
-                      }
                       toolContext += `\n[TOOL:assessor]\n${JSON.stringify({
                         status: "success",
-                        ...assessorData
+                        ...aData
                       }, null, 2)}`;
                     } else {
                       assessorStatus = "no_data";
@@ -727,18 +804,11 @@ export async function POST(request: NextRequest) {
               }
             }
           }
-        } else if (address) {
-          zoningStatus = "not_implemented";
-          overlaysStatus = "not_implemented";
-          assessorStatus = "not_implemented";
-          const msg = "Address-to-parcel lookup is coming soon. For now, please provide an APN (e.g., 5843-004-015).";
-          zoningMessage = msg;
-          overlaysMessage = msg;
-          assessorMessage = msg;
-          toolContext += `\n[TOOL_NOTE] ${msg}`;
-        } else {
+        } else if (!address) {
+          // No APN and no address detected
           toolContext += `\n[TOOL_NOTE] No APN/AIN or address detected in the query.`;
         }
+        // Note: if address search returned multiple matches, we already handled it above
       }
     } catch (e) {
       zoningStatus = "error";
@@ -760,8 +830,35 @@ ASSESSOR_STATUS: ${assessorStatus}${assessorMessage ? `\nASSESSOR_MESSAGE: ${ass
     log.log('CHAT', 'Tool context ready', { length: toolContext.length });
     log.benchmark('tool_context_ready');
 
+    // ─────────────────────────────────────────────────────────────────────
+    // PHASE 6B: Handle multiple address matches - return early with picker data
+    // ─────────────────────────────────────────────────────────────────────
+    if (addressSearchResults && addressSearchResults.length > 1) {
+      log.log('CHAT', 'Returning address picker data', { count: addressSearchResults.length });
+      
+      return NextResponse.json(
+        { 
+          response: `I found ${addressSearchResults.length} parcels matching that address. Please select the correct one:`,
+          intent,
+          addressMatches: addressSearchResults.map(r => ({
+            address: r.address,
+            city: r.city,
+            zip: r.zip,
+            apn: r.ain || r.apn,
+          })),
+          metadata: {
+            queriedAt: new Date().toISOString(),
+            type: 'address_picker',
+          }
+        },
+        { 
+          status: 200,
+          headers: getRateLimitHeaders(rateCheck)
+        }
+      );
+    }
+
     // --- Step 3: Build prompts ---
-    // FIX #32, #33, #34: Updated system prompt with standardized field names
     const systemPreamble = `
 You are LA-Fires Assistant.
 
@@ -783,6 +880,10 @@ Check the [SECTION_STATUS] block for each section's status:
 - "error": Show the section heading, then: "Could not retrieve data. Please try again or check the official viewer."
 - "not_configured": Show the section heading, then: "Not yet available for this city. Use the city's official GIS viewer."
 - "not_implemented": Show the section heading, then the message from SECTION_STATUS.
+
+ADDRESS RESOLUTION
+- If [TOOL:address_resolved] is present, briefly mention the address was found and matched to a parcel, then show the data normally.
+- Example: "Found parcel at [address]. Here's the zoning information:"
 
 CRITICAL - ZONING SECTION (FIX #32, #33, #34)
 When the zoning tool output contains a "formatted" field, output its contents EXACTLY as provided.
@@ -885,7 +986,6 @@ FORMAT
             if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) return false;
             if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) return false;
             if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) return false;
-            // FIX #32: Filter out old inconsistent field names that shouldn't appear
             if (/^\s*GEN[_\s]?CODE\s*:/i.test(line)) return false;
             if (/^\s*CODE[_\s]?LABEL\s*:/i.test(line)) return false;
             if (/^\s*PLANNINGAREA\s*:/i.test(line)) return false;
@@ -915,11 +1015,12 @@ FORMAT
       timestamp: new Date().toISOString(),
     });
 
-    // FIX #38: Include metadata in response for timestamp and jurisdiction
+    // FIX #38: Include metadata in response
     return NextResponse.json(
       { 
         response: text, 
         intent,
+        resolvedAddress: resolvedFromAddress,
         metadata: {
           queriedAt: new Date().toISOString(),
           jurisdiction: detectedJurisdiction || undefined,
