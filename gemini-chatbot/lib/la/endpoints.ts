@@ -1,3 +1,8 @@
+// lib/la/endpoints.ts
+// Central registry for LA County endpoints + viewer links (env-driven).
+// Phase 5B: Added FIX #41 - AIN validation and formatting functions
+// Phase 7B: Added universalHazardQueries for all jurisdictions
+
 type EndpointMap = Readonly<{
   ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
   GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
@@ -17,7 +22,7 @@ type EndpointMap = Readonly<{
   HILLSIDE_OVERLAY_QUERY?: string;
   FLOOD_100YR_QUERY?: string;
   
-  // Phase 7: Additional hazard layers
+  // Phase 7: Additional hazard layers (state/federal - apply to ALL jurisdictions)
   FAULT_ZONE_QUERY?: string;
   LIQUEFACTION_ZONE_QUERY?: string;
   LANDSLIDE_ZONE_QUERY?: string;
@@ -75,6 +80,8 @@ export const endpoints = {
   assessorParcelQuery: ENDPOINTS.ASSESSOR_PARCEL_QUERY,
   jurisdictionQuery: ENDPOINTS.JURISDICTION_QUERY,
 
+  // County-specific overlays (only for unincorporated areas)
+  // Note: These still include hazards for county flow, which is fine
   overlayQueries: [
     ENDPOINTS.OVERLAY_QUERY_1,
     ENDPOINTS.OVERLAY_QUERY_2,
@@ -87,7 +94,22 @@ export const endpoints = {
     ENDPOINTS.HILLSIDE_OVERLAY_QUERY,
     ENDPOINTS.FLOOD_100YR_QUERY,
     
-    // Phase 7: Additional hazard layers
+    // Phase 7: Additional hazard layers (also in universalHazardQueries)
+    ENDPOINTS.FAULT_ZONE_QUERY,
+    ENDPOINTS.LIQUEFACTION_ZONE_QUERY,
+    ENDPOINTS.LANDSLIDE_ZONE_QUERY,
+    ENDPOINTS.TSUNAMI_ZONE_QUERY,
+    ENDPOINTS.COASTAL_ZONE_QUERY,
+  ].filter(Boolean) as string[],
+
+  // Phase 7B: Universal hazard layers - queried for ALL jurisdictions (city AND county)
+  // These are state/federal regulatory layers, not local planning overlays:
+  // - Alquist-Priolo Fault Zones (California state-mandated)
+  // - Liquefaction Zones (California Geological Survey)
+  // - Landslide Zones (California Geological Survey)
+  // - Tsunami Inundation Zones (State/FEMA)
+  // - Coastal Zone (California Coastal Commission)
+  universalHazardQueries: [
     ENDPOINTS.FAULT_ZONE_QUERY,
     ENDPOINTS.LIQUEFACTION_ZONE_QUERY,
     ENDPOINTS.LANDSLIDE_ZONE_QUERY,
