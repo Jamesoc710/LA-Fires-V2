@@ -1,6 +1,4 @@
-// app/api/chat/route.ts
-// Phase 6B: Address-to-APN Lookup Implementation
-// Includes Phase 5A Field Normalization, Phase 4 Performance Optimizations
+
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -16,6 +14,7 @@ import {
   searchParcelsByAddress,
   looksLikeAddress,
   type AddressSearchResult,
+  lookupUniversalHazards,  // Phase 7B: Universal hazard layers
 } from "@/lib/la/fetchers";
 import { getCityProvider, debugProvidersLog } from "@/lib/la/providers";
 import { createRequestLogger, logRequestMetrics, createTimer, type RequestLogger } from "@/lib/la/logger";
@@ -666,15 +665,32 @@ export async function POST(request: NextRequest) {
                   }
                 }
 
-                // Process overlays result
+
+                // Process overlays result - PHASE 7B: Include universal hazards
                 if (SHOW_OVERLAYS) {
+                  // Query universal hazards for ALL jurisdictions (state/federal layers)
+                  let universalHazards: OverlayCard[] = [];
+                  try {
+                    const hazardResult = await lookupUniversalHazards(centroid, parcel.geometry);
+                    universalHazards = hazardResult.overlays || [];
+                    if (universalHazards.length > 0) {
+                      console.log(`[OVERLAY] Universal hazards for city parcel: ${universalHazards.length} found`);
+                    }
+                  } catch (e) {
+                    console.warn("[OVERLAY] Universal hazard query failed:", e);
+                  }
+
                   if (provider?.method === "arcgis_query" && provider.overlays?.length) {
                     if (overlaysResult.status === "fulfilled" && overlaysResult.value) {
                       const oData = overlaysResult.value as any;
-                      if (oData.overlays && oData.overlays.length > 0) {
+                      // Merge city overlays with universal hazards
+                      const cityOverlays: OverlayCard[] = oData.overlays || [];
+                      const allOverlays = [...cityOverlays, ...universalHazards];
+                      
+                      if (allOverlays.length > 0) {
                         overlaysStatus = "success";
-                        overlayCount = oData.overlays.length;
-                        const formattedOverlays = formatGroupedOverlays(oData.overlays, detectedJurisdiction!);
+                        overlayCount = allOverlays.length;
+                        const formattedOverlays = formatGroupedOverlays(allOverlays, detectedJurisdiction!);
                         toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
                           status: "success",
                           formatted: formattedOverlays,
@@ -689,22 +705,46 @@ export async function POST(request: NextRequest) {
                         }, null, 2)}`;
                       }
                     } else if (overlaysResult.status === "rejected") {
-                      overlaysStatus = "error";
-                      overlaysMessage = `Error retrieving overlays.`;
+                      // City overlays failed, but we may still have universal hazards
+                      if (universalHazards.length > 0) {
+                        overlaysStatus = "success";
+                        overlayCount = universalHazards.length;
+                        const formattedOverlays = formatGroupedOverlays(universalHazards, detectedJurisdiction!);
+                        toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
+                          status: "success",
+                          formatted: formattedOverlays,
+                          note: "City-specific overlays unavailable; showing state/county hazard layers only.",
+                        }, null, 2)}`;
+                      } else {
+                        overlaysStatus = "error";
+                        overlaysMessage = `Error retrieving overlays.`;
+                        toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
+                          status: "error",
+                          jurisdiction: detectedJurisdiction,
+                          message: overlaysMessage,
+                        }, null, 2)}`;
+                      }
+                    }
+                  } else {
+                    // Provider not configured, but still show universal hazards if any
+                    if (universalHazards.length > 0) {
+                      overlaysStatus = "success";
+                      overlayCount = universalHazards.length;
+                      const formattedOverlays = formatGroupedOverlays(universalHazards, detectedJurisdiction!);
                       toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-                        status: "error",
+                        status: "success",
+                        formatted: formattedOverlays,
+                        note: "City-specific overlays not configured; showing state/county hazard layers.",
+                      }, null, 2)}`;
+                    } else {
+                      overlaysStatus = "not_configured";
+                      overlaysMessage = `Overlay lookup for ${cityName} is not yet configured.`;
+                      toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
+                        status: "not_configured",
                         jurisdiction: detectedJurisdiction,
                         message: overlaysMessage,
                       }, null, 2)}`;
                     }
-                  } else {
-                    overlaysStatus = "not_configured";
-                    overlaysMessage = `Overlay lookup for ${cityName} is not yet configured.`;
-                    toolContext += `\n[TOOL:city_overlays]\n${JSON.stringify({
-                      status: "not_configured",
-                      jurisdiction: detectedJurisdiction,
-                      message: overlaysMessage,
-                    }, null, 2)}`;
                   }
                 }
 
