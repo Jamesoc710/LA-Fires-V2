@@ -1,7 +1,3 @@
-// lib/la/endpoints.ts
-// Central registry for LA County endpoints + viewer links (env-driven).
-// Phase 5B: Added FIX #41 - AIN validation and formatting functions
-
 type EndpointMap = Readonly<{
   ZNET_ADDRESS_SEARCH: string;    // PARCEL layer (AIN/APN + geometry)
   GISNET_PARCEL_QUERY: string;    // ZONING layer (ZONE, Z_DESC, etc.)
@@ -20,6 +16,13 @@ type EndpointMap = Readonly<{
   FIRE_HAZARD_ZONES_QUERY?: string;
   HILLSIDE_OVERLAY_QUERY?: string;
   FLOOD_100YR_QUERY?: string;
+  
+  // Phase 7: Additional hazard layers
+  FAULT_ZONE_QUERY?: string;
+  LIQUEFACTION_ZONE_QUERY?: string;
+  LANDSLIDE_ZONE_QUERY?: string;
+  TSUNAMI_ZONE_QUERY?: string;
+  COASTAL_ZONE_QUERY?: string;
 }>;
 
 const env = (k: string, fallback = "") => (process.env[k] || fallback).trim();
@@ -52,9 +55,18 @@ export const ENDPOINTS: EndpointMap = Object.freeze({
   OVERLAY_QUERY_4: env("OVERLAY_QUERY_4"),
   OVERLAY_QUERY_5: env("OVERLAY_QUERY_5"),
   OVERLAY_QUERY_6: env("OVERLAY_QUERY_6"),
+  
+  // Hazard overlays
   FIRE_HAZARD_ZONES_QUERY: env("FIRE_HAZARD_ZONES_QUERY"),
   HILLSIDE_OVERLAY_QUERY: env("HILLSIDE_OVERLAY_QUERY"),
   FLOOD_100YR_QUERY: env("FLOOD_100YR_QUERY"),
+  
+  // Phase 7: Additional hazard layers from LA County Hazards MapServer
+  FAULT_ZONE_QUERY: env("FAULT_ZONE_QUERY"),
+  LIQUEFACTION_ZONE_QUERY: env("LIQUEFACTION_ZONE_QUERY"),
+  LANDSLIDE_ZONE_QUERY: env("LANDSLIDE_ZONE_QUERY"),
+  TSUNAMI_ZONE_QUERY: env("TSUNAMI_ZONE_QUERY"),
+  COASTAL_ZONE_QUERY: env("COASTAL_ZONE_QUERY"),
 });
 
 export const endpoints = {
@@ -74,6 +86,13 @@ export const endpoints = {
     ENDPOINTS.FIRE_HAZARD_ZONES_QUERY,
     ENDPOINTS.HILLSIDE_OVERLAY_QUERY,
     ENDPOINTS.FLOOD_100YR_QUERY,
+    
+    // Phase 7: Additional hazard layers
+    ENDPOINTS.FAULT_ZONE_QUERY,
+    ENDPOINTS.LIQUEFACTION_ZONE_QUERY,
+    ENDPOINTS.LANDSLIDE_ZONE_QUERY,
+    ENDPOINTS.TSUNAMI_ZONE_QUERY,
+    ENDPOINTS.COASTAL_ZONE_QUERY,
   ].filter(Boolean) as string[],
 
   znetViewer: ENDPOINTS.ZNET_VIEWER,
