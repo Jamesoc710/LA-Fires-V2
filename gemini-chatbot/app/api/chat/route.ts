@@ -1,3 +1,6 @@
+// app/api/chat/route.ts
+// Phase 6B: Address-to-APN Lookup Implementation
+// Includes Phase 5A Field Normalization, Phase 4 Performance Optimizations
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
