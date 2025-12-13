@@ -1,6 +1,3 @@
-// app/api/chat/route.ts
-// Phase 6B: Address-to-APN Lookup Implementation
-// Includes Phase 5A Field Normalization, Phase 4 Performance Optimizations
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles } from "../../utils/contextLoader";
@@ -53,8 +50,8 @@ function extractAddress(s: string): string | undefined {
   // Try to extract a street address from the user's input
   // This handles queries like "zoning for 3652 Monterosa Dr Altadena"
   
-  // Common street type suffixes
-  const streetTypes = '(?:st|street|ave|avenue|blvd|boulevard|dr|drive|ln|lane|rd|road|ct|court|cir|circle|pl|place|ter|terrace|pkwy|parkway|hwy|highway|way)';
+  // Common street type suffixes (comprehensive list)
+  const streetTypes = '(?:st|street|ave|avenue|blvd|boulevard|dr|drive|ln|lane|rd|road|ct|court|cir|circle|pl|place|ter|terrace|pkwy|parkway|hwy|highway|way|cres|crescent|trl|trail|loop|pass|row|walk|path|xing|crossing|aly|alley|sq|square)';
   
   // Pattern: street number + street name words + street type + optional city/state/zip
   // Examples: "3652 Monterosa Dr", "3652 Monterosa Drive Altadena", "123 N Main St Los Angeles CA"
@@ -749,7 +746,13 @@ export async function POST(request: NextRequest) {
                     if (zData.zoning) {
                       zoningStatus = "success";
                       
-                      const normalized = normalizeZoningData(zData.zoning, detectedJurisdiction!);
+                      // FIX: Build raw data object for normalizer (not just the string)
+                      const rawZoningData: Record<string, any> = {
+                        ZONE: zData.zoning,
+                        ...(zData.details || {}),
+                      };
+                      
+                      const normalized = normalizeZoningData(rawZoningData, detectedJurisdiction!);
                       const formattedZoning = formatZoningForContext(normalized);
                       
                       toolContext += `\n[TOOL:zoning]\n${JSON.stringify({
