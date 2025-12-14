@@ -756,10 +756,10 @@ function clearChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
-    "What's the zoning for APN 5843-004-015?",
-    "3652 Monterosa Dr Altadena",
-    "Show overlays for 2013 Lemoyne St",
-    "Assessor details for APN 5843-003-012",
+    "Zoning, overlays and assessor details for 5314 La Crescenta Ave",
+    "Overlay details for APN 5843-004-015",
+    "Show zoning for 2013 Lemoyne St",
+    "Assessor details for AIN 5843003012",
   ];
 
   const scrollToBottom = () => {
