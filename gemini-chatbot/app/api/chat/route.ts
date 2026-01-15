@@ -418,10 +418,10 @@ export async function POST(request: NextRequest) {
     log.benchmark('request_parsed');
 
    const contextData = await loadAllContextFiles();
-   const municodeContext = await loadMunicodeContext(lastUser);
-   const combinedContext = contextData + municodeContext;
-    const lastUser = messages[messages.length - 1]?.content || "";
-    const intent = lastUser;
+const lastUser = messages[messages.length - 1]?.content || "";
+const intent = lastUser;
+const municodeContext = await loadMunicodeContext(lastUser);  
+const combinedContext = contextData + municodeContext;
 
     // Determine which sections to show
     const qForIntent = intent.toLowerCase();
