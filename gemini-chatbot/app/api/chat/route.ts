@@ -1,7 +1,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
-import { loadAllContextFiles } from "../../utils/contextLoader";
+import { loadAllContextFiles, loadMunicodeContext } from "../../utils/contextLoader";
 import { 
   lookupZoning, 
   lookupAssessor, 
@@ -417,7 +417,9 @@ export async function POST(request: NextRequest) {
 
     log.benchmark('request_parsed');
 
-    const contextData = await loadAllContextFiles();
+   const contextData = await loadAllContextFiles();
+   const municodeContext = await loadMunicodeContext(lastUser);
+   const combinedContext = contextData + municodeContext;
     const lastUser = messages[messages.length - 1]?.content || "";
     const intent = lastUser;
 
@@ -1048,7 +1050,7 @@ FORMAT
             `=== TOOL OUTPUTS (authoritative) ===\n` +
             `${toolContext || "(none)"}\n\n` +
             `=== STATIC CONTEXT (supporting) ===\n` +
-            `${contextData}`.trim()
+            `${combinedContext}`.trim()
         }],
       },
       { role: "user", parts: [{ text: messages[messages.length - 1].content }] },
