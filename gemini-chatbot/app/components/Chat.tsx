@@ -967,6 +967,27 @@ function clearChat() {
     );
   }
 
+  // NEW FIX: Check if this is a general Q&A response (no parcel data)
+  // If there are no structured sections AND no APN/AIN, render as simple chat bubble
+  const isGeneralQA = !parsed?.zoning && 
+                      !parsed?.overlays && 
+                      !parsed?.groupedOverlays && 
+                      !parsed?.assessor && 
+                      !parsed?.apn && 
+                      !parsed?.ain;
+
+  if (isGeneralQA) {
+    return (
+      <div className="max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+        <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {parsed?.raw ?? text}
+          </ReactMarkdown>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full max-w-[80%] space-y-3">
       {/* header row: chips + viewer links + actions */}
