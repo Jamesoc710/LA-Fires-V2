@@ -1093,7 +1093,7 @@ function clearChat() {
   // FIX #9: Check for parcel not found error
   if (parsed?.isParcelNotFound) {
     return (
-      <div className="w-full max-w-[80%] space-y-3">
+      <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
         <ParcelNotFoundCard apn={parsed.apn} message={parsed.errorMessage} />
       </div>
     );
@@ -1110,7 +1110,7 @@ function clearChat() {
 
   if (isGeneralQA) {
     return (
-      <div className="max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+      <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
         <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {parsed?.raw ?? text}
@@ -1121,7 +1121,7 @@ function clearChat() {
   }
 
   return (
-    <div className="w-full max-w-[80%] space-y-3">
+    <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
       {/* header row: chips + viewer links + actions */}
       <div className="flex flex-wrap gap-2 items-center">
         {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
@@ -1283,8 +1283,9 @@ function clearChat() {
       <button
         type="button"
         onClick={() => setShowRawForIndex(showRaw ? null : index)}
-        className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md 
-                   bg-slate-200 dark:bg-slate-700 
+        aria-expanded={showRaw}
+        className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
+                   bg-slate-200 dark:bg-slate-700
                    text-slate-700 dark:text-slate-200
                    hover:bg-slate-300 dark:hover:bg-slate-600
                    transition-colors min-h-[44px]"
@@ -1317,7 +1318,7 @@ function clearChat() {
     // narrative as a plain chat bubble; the picker itself renders separately.
     if (!anySection) {
       return (
-        <div className="max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+        <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
           <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </div>
@@ -1360,7 +1361,7 @@ function clearChat() {
       'inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline';
 
     return (
-      <div className="w-full max-w-[80%] space-y-3">
+      <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
         {/* header row: chips + viewer links + actions */}
         <div className="flex flex-wrap gap-2 items-center">
           {apn && <Chip>APN: {formatApnDisplay(apn)}</Chip>}
@@ -1490,6 +1491,7 @@ function clearChat() {
         <button
           type="button"
           onClick={() => setShowRawForIndex(showRaw ? null : index)}
+          aria-expanded={showRaw}
           className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
                      bg-slate-200 dark:bg-slate-700
                      text-slate-700 dark:text-slate-200
@@ -1523,7 +1525,7 @@ return (
           className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
         >
           {message.role === 'user' ? (
-            <div className="max-w-[70%] rounded-xl p-4 shadow-md bg-blue-500 text-white">
+            <div className="max-w-[92%] sm:max-w-[70%] rounded-xl p-4 shadow-md bg-blue-500 text-white">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
@@ -1541,7 +1543,7 @@ return (
       {/* Phase 6B: Address Picker UI */}
       {addressMatches && addressMatches.length > 1 && (
         <div className="flex justify-start">
-          <div className="w-full max-w-[80%]">
+          <div className="w-full max-w-[92%] sm:max-w-[80%]">
             <AddressPicker
               results={addressMatches}
               onSelect={handleAddressSelect}
@@ -1553,11 +1555,15 @@ return (
 
       {isLoading && (
         <div className="flex justify-start">
-          <div className="max-w-[70%] rounded-lg p-3 bg-gray-200 text-gray-800">
+          <div
+            role="status"
+            aria-label="Assistant is thinking"
+            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100"
+          >
             <div className="flex space-x-2 items-center">
-              <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" />
-              <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-              <div className="w-2 h-2 bg-gray-600 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
             </div>
           </div>
         </div>
@@ -1565,7 +1571,10 @@ return (
 
       {error && (
         <div className="flex justify-center">
-          <div className="max-w-[70%] rounded-lg p-3 bg-red-100 text-red-800">
+          <div
+            role="alert"
+            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-100"
+          >
             Error: {error}
           </div>
         </div>
@@ -1626,12 +1635,13 @@ return (
           onChange={e => setInput(e.target.value)}
           disabled={isLoading}
           placeholder="Enter APN (5843-004-015) or address (3652 Monterosa Dr)…"
+          aria-label="Message input"
           className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={isLoading || !input.trim()}
-          className="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
         >
           Send
         </button>

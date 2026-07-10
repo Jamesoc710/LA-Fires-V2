@@ -5,7 +5,7 @@ import Chat from '../components/Chat';
 
 export default function ChatPage() {
   return (
-    <main className="flex h-screen flex-col overflow-hidden">
+    <main className="flex h-dvh flex-col overflow-hidden">
       <header className="bg-blue-600 text-white p-4 shadow-md">
         <h1 className="text-xl font-bold">LA Building Codes Assistant</h1>
         <p className="text-sm">A project from IF Lab</p>

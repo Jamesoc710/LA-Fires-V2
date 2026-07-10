@@ -1,79 +1,96 @@
 // app/landing/page.tsx
 
-import { CalendarDaysIcon, ClockIcon, CreditCardIcon } from '@heroicons/react/20/solid'
+import {
+  MapPinIcon,
+  ShieldExclamationIcon,
+  BookOpenIcon,
+} from '@heroicons/react/24/outline'
 import Link from 'next/link'
 
 const features = [
   {
-    name: 'Answers when you need them',
+    name: 'Parcel lookup',
     description:
-      'Instant help, any time, day or night',
-    icon: CalendarDaysIcon,
+      'Look up any LA County parcel by street address or APN and get zoning, general plan, and planning-area details instantly.',
+    icon: MapPinIcon,
   },
   {
-    name: 'Build Faster',
+    name: 'Hazard & overlay awareness',
     description:
-      'Accelerate project timelines',
-    icon: ClockIcon,
+      'See fire severity zones, fault and liquefaction hazards, and historic districts that apply to a property.',
+    icon: ShieldExclamationIcon,
   },
   {
-    name: 'Spend Less',
+    name: 'Building-code guidance',
     description:
-      'Reduce costly non-compliance corrections',
-    icon: CreditCardIcon,
+      'Get answers grounded in LA County Title 26 to help you navigate the rules for your rebuild.',
+    icon: BookOpenIcon,
   },
 ]
 
 export default function LandingPage() {
   return (
-    <main className="min-h-screen overflow-x-hidden bg-white dark:bg-gray-900 text-black dark:text-white py-24 sm:py-32 flex items-center justify-center">
-      <div className="mx-auto max-w-7xl px-6 lg:px-8">
-        <div className="mx-auto grid items-stretch max-w-none grid-cols-1 gap-x-8 gap-y-16 sm:gap-y-20 lg:mx-0 lg:grid-cols-[1fr_3fr]">
-          
-          {/* Text column */}
-          <div className="lg:pt-4 lg:pr-8">
-            <div className="lg:max-w-lg space-y-6">
-              <h1 className="text-5xl font-bold text-indigo-600">LA Fires Project</h1>
-              <p className="text-lg text-gray-600 dark:text-gray-300">
-                Your AI-powered guide to LA building codes.
-              </p>
-              <Link
-                href="/chat"
-                className="inline-block px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition"
-              >
-                Chat Now
-              </Link>
-              <p className="mt-6 text-base text-gray-600 dark:text-gray-400">
-                Features:
-              </p>
-              <dl className="mt-4 space-y-4 text-base text-gray-600 dark:text-gray-400">
-                {features.map((feature) => (
-                  <div key={feature.name} className="relative pl-9 flex flex-col">
-                    <dt className="font-semibold text-gray-900 dark:text-white block">
-                      <feature.icon className="absolute top-1 left-0 h-5 w-5 text-indigo-600" aria-hidden="true" />
-                      {feature.name}
-                    </dt>
-                    <dd className="mt-1 text-base text-gray-600 dark:text-gray-400">{feature.description}</dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
+    <main className="min-h-screen overflow-x-hidden bg-white dark:bg-slate-900 text-slate-900 dark:text-white flex flex-col">
+      <div className="flex-1 flex items-center justify-center py-24 sm:py-32">
+        <div className="mx-auto max-w-7xl px-6 lg:px-8">
+          <div className="mx-auto max-w-3xl text-center">
+            <h1 className="text-4xl sm:text-5xl font-bold text-blue-600">
+              Rebuild with confidence
+            </h1>
+            <p className="mt-6 text-lg text-slate-600 dark:text-slate-300">
+              Instant zoning, overlay, and assessor lookups for any LA County
+              parcel — plus building-code answers for your rebuild.
+            </p>
+            <Link
+              href="/chat"
+              className="mt-8 inline-block px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition"
+            >
+              Chat Now
+            </Link>
           </div>
 
-          {/* Image column */}
-          <div className="flex items-center justify-center h-full ">
+          {/* Feature cards */}
+          <div className="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-6 sm:grid-cols-3">
+            {features.map((feature) => (
+              <div
+                key={feature.name}
+                className="rounded-2xl bg-slate-50 dark:bg-slate-800 ring-1 ring-slate-200 dark:ring-slate-700 p-6"
+              >
+                <feature.icon
+                  className="h-8 w-8 text-blue-600"
+                  aria-hidden="true"
+                />
+                <h2 className="mt-4 font-semibold text-slate-900 dark:text-white">
+                  {feature.name}
+                </h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  {feature.description}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Demo video */}
+          <div className="mx-auto mt-16 max-w-4xl">
             <video
-              src="BuildingCodeAssistantDemo.mp4"
-              autoPlay
+              src="/BuildingCodeAssistantDemo.mp4"
+              poster="/demo-poster.png"
+              width={480}
+              height={308}
+              controls
               loop
               muted
               playsInline
-              className="h-full w-full object-cover rounded-xl shadow-xl ring-1 ring-gray-400/10"
+              preload="none"
+              className="w-full rounded-xl shadow-xl ring-1 ring-slate-900/10 dark:ring-slate-100/10"
             />
           </div>
-
         </div>
       </div>
+
+      <footer className="py-6 text-center text-xs text-slate-400 dark:text-slate-500">
+        A project from IF Lab
+      </footer>
     </main>
   )
 }
