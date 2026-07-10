@@ -35,17 +35,27 @@ if (!OR_API_KEY) {
 
 /* ------------------------------- helpers ------------------------------- */
 
-function wantsParcelLookup(s: string) {
-  const digits = s.replace(/\D/g, "");
-  // Either has 9+ digits (APN), or contains parcel-related keywords, or looks like an address
-  return digits.length >= 9 || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s) || looksLikeAddress(s);
-}
+// APN/AIN as an explicit 4-3-3 pattern with dashes, spaces, or dots (e.g. 5843-004-015)
+const APN_DASHED_REGEX = /\b\d{4}[-\s.]\d{3}[-\s.]\d{3}\b/;
+// Bare 10-digit run only counts as an APN when paired with a parcel-related keyword,
+// so phone numbers and other incidental 9-10 digit strings don't trigger a lookup.
+const PARCEL_KEYWORD_REGEX = /\b(apn|ain|parcel|assessor|property\s*id)\b/i;
 
 function extractApn(s: string): string | undefined {
-  const digits = s.replace(/\D/g, "");
-  if (digits.length === 10) return digits;
-  const m = s.match(/\b(\d{4}[-\s]?\d{3}[-\s]?\d{3})\b/);
-  return m ? m[1].replace(/\D/g, "") : undefined;
+  const dashed = s.match(APN_DASHED_REGEX);
+  if (dashed) return dashed[0].replace(/\D/g, "");
+
+  if (PARCEL_KEYWORD_REGEX.test(s)) {
+    const bare = s.match(/\b\d{10}\b/);
+    if (bare) return bare[0];
+  }
+
+  return undefined;
+}
+
+function wantsParcelLookup(s: string) {
+  // Either a recognizable APN signal, parcel-related keywords, or an address
+  return !!extractApn(s) || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s) || looksLikeAddress(s);
 }
 
 function extractAddress(s: string): string | undefined {
@@ -348,8 +358,8 @@ async function callOpenRouter(
 }
 
 async function orWithRetryAndFallback(contents: any[], req: NextRequest, temperature = 0.2) {
-  const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-2.5-flash-lite";
-  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-sonnet-4-20250514";
+  const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-3.1-flash-lite";
+  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-sonnet-4.6";
   const plans: [string, number][] = [[PRIMARY, 2], [FALLBACK, 1]];
 
   for (const [model, tries] of plans) {
@@ -402,11 +412,7 @@ export async function POST(request: NextRequest) {
   }
 
   let detectedJurisdiction: string | null = null;
-  let jurisdictionSource: "CITY" | "COUNTY" | "ERROR" | null = null;
-  let cacheHits = 0;
-  let cacheMisses = 0;
   let overlayCount = 0;
-  let communityName: string | null = null;
 
   try {
     noStore();
@@ -585,8 +591,7 @@ const combinedContext = contextData + municodeContext;
               jurisdictionTimer.stopAndLog(log);
               
               detectedJurisdiction = j.jurisdiction || "Unknown";
-              jurisdictionSource = j.source;
-              
+
               toolContext += `\n[TOOL:jurisdiction]\n${JSON.stringify(j, null, 2)}`;
               debugProvidersLog(j.jurisdiction);
 
@@ -1110,8 +1115,6 @@ FORMAT
       apn: extractApn(lastUser),
       jurisdiction: detectedJurisdiction || undefined,
       totalTime,
-      cacheHits,
-      cacheMisses,
       overlayCount,
       benchmarks: log.getBenchmarks(),
       timestamp: new Date().toISOString(),

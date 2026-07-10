@@ -124,35 +124,6 @@ export const overlayCache = new SimpleCache<any>("overlay", 100, 5);
 export const assessorCache = new SimpleCache<any>("assessor", 100, 10);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Request-scoped cache for deduplication within a single request
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Creates a request-scoped cache that lives for the duration of one API request.
- * This prevents duplicate fetches within the same request (Fix #26).
- */
-export function createRequestCache(): Map<string, any> {
-  return new Map();
-}
-
-/**
- * Helper to get or fetch with request-scoped caching
- */
-export async function getOrFetch<T>(
-  cache: Map<string, any>,
-  key: string,
-  fetcher: () => Promise<T>
-): Promise<T> {
-  if (cache.has(key)) {
-    return cache.get(key) as T;
-  }
-  
-  const result = await fetcher();
-  cache.set(key, result);
-  return result;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Cache statistics for monitoring
 // ─────────────────────────────────────────────────────────────────────────────
 

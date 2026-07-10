@@ -147,8 +147,6 @@ export interface RequestMetrics {
   apn?: string;
   jurisdiction?: string;
   totalTime: number;
-  cacheHits: number;
-  cacheMisses: number;
   overlayCount?: number;
   benchmarks: Record<string, number>;
   timestamp: string;

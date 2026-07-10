@@ -157,14 +157,6 @@ function firstFieldValue(a: any, csv?: string) {
   return null;
 }
 
-// WebMercator (EPSG:102100) -> WGS84 (EPSG:4326)
-function wmToWgs84(point102100: { x: number; y: number }) {
-  const R = 6378137;
-  const lon = (point102100.x / R) * 180 / Math.PI;
-  const lat = (2 * Math.atan(Math.exp(point102100.y / R)) - Math.PI / 2) * 180 / Math.PI;
-  return { x: lon, y: lat, spatialReference: { wkid: 4326 } };
-}
-
 /* ========================== ATTRIBUTE SANITIZATION ========================== */
 
 const OVERLAY_FIELD_BLACKLIST = new Set([
@@ -921,11 +913,21 @@ export async function lookupUniversalHazards(
   parcelGeometry: any
 ): Promise<{ overlays: OverlayCard[]; note?: string }> {
   const hazardEndpoints = endpoints.universalHazardQueries || [];
-  
+
   if (hazardEndpoints.length === 0) {
     console.log("[UNIVERSAL_HAZARDS] No hazard endpoints configured");
     return { overlays: [] };
   }
+
+  // No APN is available at this call site, so key by rounded centroid (~10m precision),
+  // matching the coordinate-keying pattern used by jurisdictionCache.
+  const hazardCacheKey = `hazards:${Math.round(centroid.x / 10) * 10},${Math.round(centroid.y / 10) * 10}`;
+  const cachedHazards = overlayCache.get(hazardCacheKey);
+  if (cachedHazards) {
+    console.log("[CACHE] Universal Hazards HIT:", hazardCacheKey);
+    return cachedHazards;
+  }
+  console.log("[CACHE] Universal Hazards MISS:", hazardCacheKey);
 
   console.log(`[UNIVERSAL_HAZARDS] Querying ${hazardEndpoints.length} universal hazard layers`);
 
@@ -1020,7 +1022,9 @@ export async function lookupUniversalHazards(
 
   console.log(`[UNIVERSAL_HAZARDS_AUDIT] ${overlays.length} cards created, ${dedupedOverlays.length} after dedup`);
 
-  return { overlays: dedupedOverlays };
+  const result = { overlays: dedupedOverlays };
+  overlayCache.set(hazardCacheKey, result);
+  return result;
 }
 
 /**
@@ -1122,6 +1126,14 @@ export async function lookupZoning(id: string, parcelData?: any) {
   }
   console.log("[ZONING] endpoint:", endpoints.gisnetParcelQuery);
 
+  const { digits: zoningCacheKey } = normalizeApnVariants(id);
+  const cachedZoning = zoningCache.get(zoningCacheKey);
+  if (cachedZoning) {
+    console.log("[CACHE] Zoning HIT:", zoningCacheKey);
+    return cachedZoning;
+  }
+  console.log("[CACHE] Zoning MISS:", zoningCacheKey);
+
   // FIX #26: Use provided parcel data or fetch if not provided
   const parcel = parcelData ?? await getParcelByAINorAPN(id);
   console.log(
@@ -1160,7 +1172,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
     });
     const a1 = z1.features?.[0]?.attributes ?? null;
     if (a1) {
-      return {
+      const result = {
         zoning: a1.ZONE ?? null,
         details: {
           description: a1.Z_DESC ?? null,
@@ -1172,6 +1184,8 @@ export async function lookupZoning(id: string, parcelData?: any) {
         links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
         method: "polygon",
       };
+      zoningCache.set(zoningCacheKey, result);
+      return result;
     }
   } catch (e) {
     console.log("[ZONING] polygon query failed -> envelope fallback", String(e));
@@ -1187,7 +1201,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
       });
       const a2 = z2.features?.[0]?.attributes ?? null;
       if (a2) {
-        return {
+        const result = {
           zoning: a2.ZONE ?? null,
           details: {
             description: a2.Z_DESC ?? null,
@@ -1197,6 +1211,8 @@ export async function lookupZoning(id: string, parcelData?: any) {
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "envelope",
         };
+        zoningCache.set(zoningCacheKey, result);
+        return result;
       }
     } catch (e) {
       console.log("[ZONING] envelope query failed -> centroid fallback", String(e));
@@ -1213,7 +1229,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
       });
       const a3 = z3.features?.[0]?.attributes ?? null;
       if (a3) {
-        return {
+        const result = {
           zoning: a3.ZONE ?? null,
           details: {
             description: a3.Z_DESC ?? null,
@@ -1223,6 +1239,8 @@ export async function lookupZoning(id: string, parcelData?: any) {
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "centroid",
         };
+        zoningCache.set(zoningCacheKey, result);
+        return result;
       }
     } catch (e) {
       console.log("[ZONING] centroid query failed", String(e));
@@ -1245,7 +1263,15 @@ export async function lookupOverlays(
   parcelData?: any  // FIX #26: Optional pre-fetched parcel
 ): Promise<{ input: { apn: string }; overlays: OverlayCard[]; note?: string; links?: { znet?: string } }> {
   const startTime = Date.now();
-  
+
+  const { digits: overlayCacheKey } = normalizeApnVariants(apn);
+  const cachedOverlays = overlayCache.get(overlayCacheKey);
+  if (cachedOverlays) {
+    console.log("[CACHE] Overlays HIT:", overlayCacheKey);
+    return cachedOverlays;
+  }
+  console.log("[CACHE] Overlays MISS:", overlayCacheKey);
+
   // FIX #26: Use provided parcel data or fetch if not provided
   const parcel = parcelData ?? await getParcelByAINorAPN(apn);
   if (!parcel?.geometry) {
@@ -1416,11 +1442,13 @@ export async function lookupOverlays(
   const finalOverlays = Array.from(dedupMap.values());
   console.log(`[OVERLAY_AUDIT] County summary: ${results.length} hits, ${finalOverlays.length} after dedup from ${overlayUrls.length} endpoints`);
 
-  return {
+  const result = {
     input: { apn },
     overlays: finalOverlays,
     links: { znet: endpoints.znetViewer },
   };
+  overlayCache.set(overlayCacheKey, result);
+  return result;
 }
 
 function summarizeCountyOverlay(a?: Record<string, any> | null): string | undefined {
@@ -1447,6 +1475,13 @@ function summarizeCountyOverlay(a?: Record<string, any> | null): string | undefi
 
 export async function lookupAssessor(id: string, parcelData?: any) {
   const { digits, dashed } = normalizeApnVariants(id);
+
+  const cachedAssessor = assessorCache.get(digits);
+  if (cachedAssessor) {
+    console.log("[CACHE] Assessor HIT:", digits);
+    return cachedAssessor;
+  }
+  console.log("[CACHE] Assessor MISS:", digits);
 
   if (!endpoints.assessorParcelQuery) {
     return { links: { assessor: endpoints.assessorViewerForAIN(digits) } };
@@ -1525,7 +1560,7 @@ export async function lookupAssessor(id: string, parcelData?: any) {
       .map(k => Number(get(k)) || 0)
       .reduce((s, n) => s + n, 0) || null;
 
-  return {
+  const result = {
     ain, apn, situs, city, zip,
     use,
     livingArea,
@@ -1536,4 +1571,6 @@ export async function lookupAssessor(id: string, parcelData?: any) {
     bathrooms: get("Bathrooms1"),
     links: { assessor: endpoints.assessorViewerForAIN((ain ?? digits).toString()) },
   };
+  assessorCache.set(digits, result);
+  return result;
 }

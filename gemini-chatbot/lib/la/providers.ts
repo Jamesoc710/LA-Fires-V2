@@ -114,21 +114,3 @@ export type JurisdictionResult = {
   raw?: Record<string, any>;
   note?: string;
 };
-
-/* -------------------------------------------------------------------------- */
-/*                           Provider Lookup Helper                           */
-/* -------------------------------------------------------------------------- */
-
-// Global registry for resolved city providers
-let REGISTRY: Record<string, CityProvider> = {};
-try {
-  REGISTRY = loadCityProvidersSafe();
-} catch {
-  REGISTRY = {};
-}
-
-
-// Find provider by normalized city name
-export function resolveCityProvider(cityName: string): CityProvider | undefined {
-  return getCityProvider(cityName);
-}

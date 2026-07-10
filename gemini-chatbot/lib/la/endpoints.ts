@@ -172,18 +172,6 @@ export function formatAIN(ain: string): string {
   return ain;
 }
 
-// FIX #41: Format APN for display (same format as AIN)
-/**
- * Format APN for human-readable display (XXXX-XXX-XXX format).
- */
-export function formatAPN(apn: string): string {
-  const digits = apn.replace(/\D/g, '');
-  if (digits.length === 10) {
-    return `${digits.slice(0, 4)}-${digits.slice(4, 7)}-${digits.slice(7)}`;
-  }
-  return apn;
-}
-
 // FIX #5: City-specific viewer URLs
 export const zimasViewerUrl = "https://zimas.lacity.org/";
 export const pasadenaZoningViewerUrl = "https://cityofpasadena.net/planning/zoning/";

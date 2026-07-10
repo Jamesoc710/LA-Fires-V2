@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.0",
     "@heroicons/react": "^2.2.0",
     "next": "15.3.6",
     "react": "^19.0.0",
@@ -22,6 +21,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.3.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
