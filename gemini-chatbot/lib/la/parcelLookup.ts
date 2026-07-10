@@ -55,9 +55,52 @@ export function extractApn(s: string): string | undefined {
   return undefined;
 }
 
+// Parcel-flavored keywords: the query is asking about a parcel/zoning/overlay/assessor.
+const PARCEL_FLAVOR_REGEX = /apn|ain|zoning|overlay|overlays|assessor|parcel/i;
+
 export function wantsParcelLookup(s: string) {
   // Either a recognizable APN signal, parcel-related keywords, or an address
-  return !!extractApn(s) || /apn|ain|zoning|overlay|overlays|assessor|parcel/i.test(s) || looksLikeAddress(s);
+  return !!extractApn(s) || PARCEL_FLAVOR_REGEX.test(s) || looksLikeAddress(s);
+}
+
+// Does the message clearly refer to a previously selected ("active") parcel
+// without naming an APN/address of its own? e.g. "is it in a fire zone",
+// "can I rebuild", "the parcel", "this property".
+export function refersToActiveParcel(s: string): boolean {
+  return /\b(it|this|the)\s+(parcel|property|lot|house)\b/i.test(s)
+    || /\bis\s+it\b/i.test(s)
+    || /\bcan\s+i\b/i.test(s)
+    || /\brebuild\b/i.test(s)
+    || /\bfire\s*zone\b/i.test(s);
+}
+
+/**
+ * One-line synopsis of the data a prior assistant turn already showed, folded
+ * into conversation history so the model has context without the full card text.
+ * e.g. "[Data shown: APN 5843004015, Unincorporated LA County, zone R-1-10000,
+ * 6 overlays, assessor: built 1948, 1240 sqft]"
+ */
+export function buildCardSynopsis(cards: ParcelCards): string {
+  const parts: string[] = [];
+  if (cards.apn) parts.push(`APN ${cards.apn}`);
+  if (cards.jurisdiction) parts.push(cards.jurisdiction);
+
+  const zone = cards.zoning?.card?.zone;
+  if (zone) parts.push(`zone ${zone}`);
+
+  const overlayItemCount = (cards.overlays?.groups || [])
+    .reduce((n, g) => n + (g.items?.length || 0), 0);
+  if (overlayItemCount > 0) parts.push(`${overlayItemCount} overlay${overlayItemCount === 1 ? '' : 's'}`);
+
+  const assessor = cards.assessor?.card;
+  if (assessor) {
+    const bits: string[] = [];
+    if (assessor.yearBuilt != null && String(assessor.yearBuilt).trim() !== '') bits.push(`built ${assessor.yearBuilt}`);
+    if (assessor.livingArea != null) bits.push(`${assessor.livingArea} sqft`);
+    if (bits.length) parts.push(`assessor: ${bits.join(', ')}`);
+  }
+
+  return parts.length ? `[Data shown: ${parts.join(', ')}]` : '';
 }
 
 export function extractAddress(s: string): string | undefined {
@@ -326,7 +369,7 @@ export type ParcelLookupResult = {
   overlayCount: number;
 };
 
-export async function runParcelLookup(lastUser: string, log: RequestLogger): Promise<ParcelLookupResult> {
+export async function runParcelLookup(lastUser: string, log: RequestLogger, activeApn?: string): Promise<ParcelLookupResult> {
   // Determine which sections to show
   const qForIntent = lastUser.toLowerCase();
 
@@ -341,7 +384,9 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger): Pro
     SHOW_OVERLAYS = /\boverlays?\b/i.test(qForIntent);
     SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
   } else {
-    if (wantsParcelLookup(qForIntent)) {
+    // Default to zoning for a generic parcel lookup, or when the message refers
+    // to a previously selected parcel and we have one to reuse.
+    if (wantsParcelLookup(qForIntent) || (activeApn && refersToActiveParcel(lastUser))) {
       SHOW_ZONING = true;
     }
   }
@@ -374,9 +419,24 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger): Pro
   let resolvedFromAddress: { address: string; apn: string } | null = null;
 
   try {
-    if (wantsParcelLookup(lastUser)) {
-      let apn = extractApn(lastUser);
-      const address = !apn ? extractAddress(lastUser) : undefined;
+    let apn = extractApn(lastUser);
+    const address = !apn ? extractAddress(lastUser) : undefined;
+
+    // Active-parcel follow-up: reuse the previously selected APN when the current
+    // message names no APN/address of its own but is parcel-flavored or clearly
+    // refers to the active parcel (e.g. "what about the overlays for it?").
+    let reusedActiveParcel = false;
+    if (!apn && !address && activeApn &&
+        (PARCEL_FLAVOR_REGEX.test(lastUser) || refersToActiveParcel(lastUser))) {
+      apn = activeApn;
+      reusedActiveParcel = true;
+    }
+
+    if (wantsParcelLookup(lastUser) || reusedActiveParcel) {
+      if (reusedActiveParcel) {
+        toolContext += `\n[TOOL_NOTE] Reusing previously selected parcel APN ${activeApn} from this conversation.`;
+        log.log('CHAT', 'Reusing active parcel', { activeApn });
+      }
 
       // ─────────────────────────────────────────────────────────────────────
       // PHASE 6B: ADDRESS-TO-APN LOOKUP

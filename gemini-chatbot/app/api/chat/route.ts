@@ -2,10 +2,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
 import { loadAllContextFiles, loadMunicodeContext } from "../../utils/contextLoader";
-import { runParcelLookup } from "@/lib/la/parcelLookup";
+import { runParcelLookup, buildCardSynopsis } from "@/lib/la/parcelLookup";
 import { createRequestLogger, logRequestMetrics, createTimer } from "@/lib/la/logger";
 import { checkRateLimit, getClientIdentifier, getRateLimitHeaders, RATE_LIMITS } from "@/lib/la/rateLimit";
 import type { StreamFrame } from "@/app/types/chat";
+import type { ParcelCards } from "@/lib/la/types";
 
 export const runtime = "nodejs";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -261,16 +262,49 @@ FORMAT
 - Never include a section whose SHOW_* flag is false.
 `.trim();
 
+type PromptTurn = { role: string; parts: { text: string }[] };
+
+// Build conversation history turns (Gemini-style {role, parts}) from the prior
+// messages so the model has multi-turn context. Assistant turns carrying
+// structured `cards` are folded to a one-line synopsis instead of full prose.
+function buildHistoryTurns(messages: any[]): PromptTurn[] {
+  // Take up to the 8 messages preceding the current (final) user message.
+  const prior = messages.slice(0, -1).slice(-8);
+  const turns: PromptTurn[] = [];
+
+  for (const m of prior) {
+    if (!m || typeof m.content !== "string") continue;
+    const isAssistant = m.role === "assistant" || m.role === "model";
+
+    let text: string;
+    if (isAssistant && m.cards) {
+      // Fold prior card data into a compact synopsis (fall back to prose).
+      text = buildCardSynopsis(m.cards as ParcelCards) || m.content || "";
+    } else {
+      text = m.content || "";
+    }
+
+    if (!text.trim()) continue;
+    if (text.length > 1000) text = text.slice(0, 1000) + "…";
+
+    // role "model" maps to assistant in toOpenAIStyleMessages.
+    turns.push({ role: isAssistant ? "model" : "user", parts: [{ text }] });
+  }
+
+  return turns;
+}
+
 function buildCombinedPrompt(opts: {
   SHOW_ZONING: boolean;
   SHOW_OVERLAYS: boolean;
   SHOW_ASSESSOR: boolean;
   intent: string;
+  history: PromptTurn[];
   toolContext: string;
   combinedContext: string;
   userText: string;
 }) {
-  const { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR, intent, toolContext, combinedContext, userText } = opts;
+  const { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR, intent, history, toolContext, combinedContext, userText } = opts;
   return [
     { role: "system", parts: [{ text: SYSTEM_PREAMBLE }] },
     {
@@ -284,6 +318,8 @@ function buildCombinedPrompt(opts: {
       }],
     },
     { role: "user", parts: [{ text: `Intent: ${intent}` }] },
+    // Prior conversation turns (folded synopsis for card-bearing assistant turns).
+    ...history,
     {
       role: "user",
       parts: [{
@@ -329,7 +365,7 @@ export async function POST(request: NextRequest) {
 
   try {
     noStore();
-    const { messages } = await request.json();
+    const { messages, activeApn } = await request.json();
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: "Invalid request. Messages must be an array." }, { status: 400 });
     }
@@ -342,8 +378,12 @@ export async function POST(request: NextRequest) {
     const municodeContext = await loadMunicodeContext(lastUser);
     const combinedContext = contextData + municodeContext;
 
+    // Conversation history (prior turns, card synopses folded) for the prompt.
+    const history = buildHistoryTurns(messages);
+    const activeApnParam = typeof activeApn === "string" && activeApn.trim() ? activeApn.trim() : undefined;
+
     // --- Step 2: live lookups producing structured cards + LLM tool context ---
-    const { cards, toolContext, flags, overlayCount } = await runParcelLookup(lastUser, log);
+    const { cards, toolContext, flags, overlayCount } = await runParcelLookup(lastUser, log, activeApnParam);
     const { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR } = flags;
 
     const isMultiAddress = !!(cards.addressMatches && cards.addressMatches.length > 1);
@@ -386,7 +426,7 @@ export async function POST(request: NextRequest) {
             } else {
               const combinedPrompt = buildCombinedPrompt({
                 SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR,
-                intent, toolContext, combinedContext, userText: lastMessageContent,
+                intent, history, toolContext, combinedContext, userText: lastMessageContent,
               });
               try {
                 for await (const delta of orStreamWithRetryAndFallback(combinedPrompt, request, 0.05)) {
@@ -463,7 +503,7 @@ export async function POST(request: NextRequest) {
     // --- Step 3: Build prompts ---
     const combinedPrompt = buildCombinedPrompt({
       SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR,
-      intent, toolContext, combinedContext, userText: lastMessageContent,
+      intent, history, toolContext, combinedContext, userText: lastMessageContent,
     });
 
     // --- Step 4: LLM call ---

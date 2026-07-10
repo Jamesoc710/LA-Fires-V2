@@ -794,7 +794,12 @@ useEffect(() => {
     const saved = localStorage.getItem('lafires.chat.v2');
     if (saved) {
       const parsed = JSON.parse(saved) as Message[];
-      if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
+      if (Array.isArray(parsed) && parsed.length) {
+        setMessages(parsed);
+        // Restore the active parcel from the most recent card-bearing message.
+        const lastApn = [...parsed].reverse().find(m => m.cards?.apn)?.cards?.apn;
+        if (lastApn) setActiveApn(lastApn);
+      }
     }
   } catch {}
 }, []);
@@ -817,6 +822,7 @@ function clearChat() {
     },
   ]);
   setAddressMatches(null);
+  setActiveApn(null);
   localStorage.removeItem('lafires.chat.v2');
 }
 
@@ -829,6 +835,9 @@ function clearChat() {
   // Phase 6B: Track address matches for picker UI
   const [addressMatches, setAddressMatches] = useState<AddressMatch[] | null>(null);
   const [originalQuery, setOriginalQuery] = useState<string>('');
+  // Conversation memory: most recently shown parcel APN, sent as `activeApn` so
+  // the server can resolve follow-ups like "what about the overlays for it?".
+  const [activeApn, setActiveApn] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const suggestions = [
@@ -865,7 +874,7 @@ function clearChat() {
           'Content-Type': 'application/json',
           'Accept': 'application/x-ndjson',
         },
-        body: JSON.stringify({ messages: outgoing }),
+        body: JSON.stringify({ messages: outgoing, activeApn }),
       });
 
       if (!response.ok) {
@@ -914,6 +923,7 @@ function clearChat() {
       if (frame.type === 'meta') {
         const am = frame.cards?.addressMatches;
         if (am && am.length > 1) setAddressMatches(am);
+        if (frame.cards?.apn) setActiveApn(frame.cards.apn);
         ensureAssistant({ cards: frame.cards, metadata: frame.metadata });
       } else if (frame.type === 'delta') {
         if (!hasAssistant) ensureAssistant();
@@ -951,6 +961,7 @@ function clearChat() {
   const handleJsonResponse = (data: ChatResponse) => {
     const am = data.cards?.addressMatches ?? data.addressMatches;
     if (am && am.length > 1) setAddressMatches(am);
+    if (data.cards?.apn) setActiveApn(data.cards.apn);
     const assistantMessage: Message = {
       role: 'assistant',
       content: data.response || 'Sorry, I could not generate a response.',
