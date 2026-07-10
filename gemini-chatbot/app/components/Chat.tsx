@@ -1,7 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Message } from '../types/chat';
+import type {
+  Message,
+  ChatResponse,
+  StreamFrame,
+  ParcelCards,
+  StandardizedZoningCard,
+  AssessorCard,
+  OverlayGroupCard,
+} from '../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -585,6 +593,73 @@ function GroupedOverlaysCard({
   );
 }
 
+/* --------- Phase 1: build SectionData/overlays from structured cards --------- */
+
+// Keys are chosen so the shared formatFieldLabel/formatFieldValue helpers
+// produce the expected labels ("ZONE DESCRIPTION", etc.) and value formatting.
+function buildZoningData(card: StandardizedZoningCard): SectionData {
+  const d: SectionData = {};
+  if (card.jurisdiction) d['JURISDICTION'] = card.jurisdiction;
+  if (card.zone) d['ZONE'] = card.zone;
+  if (card.zoneDescription) d['ZONE DESCRIPTION'] = card.zoneDescription;
+  if (card.generalPlan) d['GENERAL PLAN'] = card.generalPlan;
+  if (card.generalPlanDescription) d['GENERAL PLAN DESCRIPTION'] = card.generalPlanDescription;
+  if (card.planningArea) d['COMMUNITY/PLANNING AREA'] = card.planningArea;
+  if (card.specificPlan) d['SPECIFIC PLAN'] = card.specificPlan;
+  return d;
+}
+
+function buildAssessorData(card: AssessorCard): SectionData {
+  const d: SectionData = {};
+  const set = (k: string, v: unknown) => {
+    if (v !== undefined && v !== null && String(v).trim() !== '') d[k] = String(v);
+  };
+  set('SITUS', card.situs);
+  set('CITY', card.city);
+  set('ZIP', card.zip);
+  set('USE', card.use);
+  set('YEARBUILT', card.yearBuilt);
+  set('LIVINGAREA', card.livingArea);
+  set('LOTSQFT', card.lotSqft);
+  set('UNITS', card.units);
+  set('BEDROOMS', card.bedrooms);
+  set('BATHROOMS', card.bathrooms);
+  return d;
+}
+
+// Overlay key categories that always render (with a "None found" placeholder when empty).
+const CARD_KEY_CATEGORIES = ['Hazards', 'Historic Preservation', 'Land Use & Planning'];
+
+function buildGroupedFromCards(groups: OverlayGroupCard[] | undefined, jurisdiction?: string): GroupedOverlays {
+  const categories: OverlayCategory[] = (groups || [])
+    .filter(g => g.items.length > 0 || CARD_KEY_CATEGORIES.includes(g.category))
+    .map(g => ({
+      name: g.category.toUpperCase(),
+      items: g.items.length
+        ? g.items.map(it => (it.details ? `${it.name} — ${it.details}` : it.name))
+        : ['None found for this parcel'],
+    }));
+  return { jurisdiction, categories };
+}
+
+// Non-data section states (no_data / error / not_configured / not_implemented).
+function SectionMessageCard({ title, message }: { title: string; message?: string }) {
+  const source = DATA_SOURCES[title];
+  return (
+    <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
+      <div className="mb-2">
+        <h3 className="text-base font-semibold">{title}</h3>
+        {source && (
+          <p className="text-xs text-slate-500 dark:text-slate-400">Source: {source}</p>
+        )}
+      </div>
+      <p className="text-sm text-slate-600 dark:text-slate-300">
+        {message || 'None found for this parcel.'}
+      </p>
+    </div>
+  );
+}
+
 // FIX #9: Error card for invalid APN or data retrieval failures
 function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }) {
   return (
@@ -715,7 +790,8 @@ const [messages, setMessages] = useState<Message[]>([
 // rehydrate from localStorage on first mount
 useEffect(() => {
   try {
-    const saved = localStorage.getItem('lafires.chat');
+    // v2 persists structured `cards` on messages; tolerate messages without them.
+    const saved = localStorage.getItem('lafires.chat.v2');
     if (saved) {
       const parsed = JSON.parse(saved) as Message[];
       if (Array.isArray(parsed) && parsed.length) setMessages(parsed);
@@ -727,7 +803,7 @@ useEffect(() => {
 useEffect(() => {
   try {
     const capped = messages.slice(-50);
-    localStorage.setItem('lafires.chat', JSON.stringify(capped));
+    localStorage.setItem('lafires.chat.v2', JSON.stringify(capped));
   } catch {}
 }, [messages]);
 
@@ -741,7 +817,7 @@ function clearChat() {
     },
   ]);
   setAddressMatches(null);
-  localStorage.removeItem('lafires.chat');
+  localStorage.removeItem('lafires.chat.v2');
 }
 
   const [input, setInput] = useState('');
@@ -777,47 +853,128 @@ function clearChat() {
     setTimeout(() => setCopiedSection(null), 2000);
   };
 
-  // Phase 6B: Handle address selection from picker
-  const handleAddressSelect = async (result: AddressMatch) => {
-    setAddressMatches(null);
-    
-    // Build a new query with the resolved APN
-    const newQuery = `zoning overlays assessor for APN ${result.apn}`;
-    
-    // Add user message showing what they selected
-    const selectionMessage: Message = { 
-      role: 'user', 
-      content: `Selected: ${result.address} (APN ${formatApnDisplay(result.apn)})` 
-    };
-    setMessages(prev => [...prev, selectionMessage]);
-    
-    // Now submit the query with the APN
+  // Shared request path for handleSubmit + handleAddressSelect. Prefers NDJSON
+  // streaming; falls back gracefully to a legacy JSON response.
+  const sendChat = async (outgoing: Message[]) => {
     setIsLoading(true);
     setError(null);
-    
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messages, selectionMessage, { role: 'user', content: newQuery }] }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/x-ndjson',
+        },
+        body: JSON.stringify({ messages: outgoing }),
       });
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.response || 'Sorry, I could not generate a response.',
-        metadata: data.metadata,
-      };
-      setMessages(prev => [...prev, assistantMessage]);
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/x-ndjson') && response.body) {
+        await consumeStream(response.body);
+      } else {
+        // Server without streaming support: parse a single JSON payload.
+        const data = (await response.json()) as ChatResponse;
+        handleJsonResponse(data);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Read NDJSON frames, painting cards on `meta` and streaming text on `delta`.
+  const consumeStream = async (body: ReadableStream<Uint8Array>) => {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let hasAssistant = false;
+
+    const ensureAssistant = (init?: Partial<Message>) => {
+      setMessages(prev => [...prev, { role: 'assistant', content: '', ...init }]);
+      hasAssistant = true;
+    };
+
+    const appendDelta = (text: string) => {
+      setMessages(prev => {
+        const copy = [...prev];
+        const last = copy[copy.length - 1];
+        if (last && last.role === 'assistant') {
+          copy[copy.length - 1] = { ...last, content: last.content + text };
+        }
+        return copy;
+      });
+    };
+
+    const handleFrame = (frame: StreamFrame) => {
+      if (frame.type === 'meta') {
+        const am = frame.cards?.addressMatches;
+        if (am && am.length > 1) setAddressMatches(am);
+        ensureAssistant({ cards: frame.cards, metadata: frame.metadata });
+      } else if (frame.type === 'delta') {
+        if (!hasAssistant) ensureAssistant();
+        appendDelta(frame.text);
+      } else if (frame.type === 'error') {
+        setError(frame.message);
+      }
+      // 'done' is implicit at stream end
+    };
+
+    const flushLine = (line: string) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        handleFrame(JSON.parse(trimmed) as StreamFrame);
+      } catch {
+        // ignore malformed / partial frames
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) !== -1) {
+        flushLine(buffer.slice(0, nl));
+        buffer = buffer.slice(nl + 1);
+      }
+    }
+    flushLine(buffer); // trailing frame without newline
+  };
+
+  // Legacy (non-streamed) JSON response handling.
+  const handleJsonResponse = (data: ChatResponse) => {
+    const am = data.cards?.addressMatches ?? data.addressMatches;
+    if (am && am.length > 1) setAddressMatches(am);
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: data.response || 'Sorry, I could not generate a response.',
+      cards: data.cards,
+      metadata: data.metadata,
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+  };
+
+  // Phase 6B: Handle address selection from picker
+  const handleAddressSelect = async (result: AddressMatch) => {
+    setAddressMatches(null);
+
+    // Build a new query with the resolved APN
+    const newQuery = `zoning overlays assessor for APN ${result.apn}`;
+
+    // Add user message showing what they selected
+    const selectionMessage: Message = {
+      role: 'user',
+      content: `Selected: ${result.address} (APN ${formatApnDisplay(result.apn)})`,
+    };
+    setMessages(prev => [...prev, selectionMessage]);
+
+    await sendChat([...messages, selectionMessage, { role: 'user', content: newQuery }]);
   };
 
   // Phase 6B: Handle cancel address picker
@@ -836,49 +993,13 @@ function clearChat() {
     if (!input.trim() || isLoading) return;
 
     const userMessage: Message = { role: 'user', content: input.trim() };
+    const outgoing = [...messages, userMessage];
     setMessages(prev => [...prev, userMessage]);
     setOriginalQuery(input.trim());
     setInput('');
-    setIsLoading(true);
-    setError(null);
     setAddressMatches(null);
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: [...messages, userMessage] }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      
-      // Phase 6B: Check if this is an address picker response
-      if (data.addressMatches && data.addressMatches.length > 1) {
-        setAddressMatches(data.addressMatches);
-        const assistantMessage: Message = {
-          role: 'assistant',
-          content: data.response || `Found ${data.addressMatches.length} parcels matching that address.`,
-          metadata: data.metadata,
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        // Normal response
-        const assistantMessage: Message = {
-          role: 'assistant',
-          content: data.response || 'Sorry, I could not generate a response.',
-          metadata: data.metadata,
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-    } finally {
-      setIsLoading(false);
-    }
+    await sendChat(outgoing);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1170,6 +1291,214 @@ function clearChat() {
     </div>
   );
 }
+
+  // Phase 1: render sections DIRECTLY from structured cards (no text parsing).
+  function CardsBubble({ text, cards, index, metadata }: { text: string; cards: ParcelCards; index: number; metadata?: Message['metadata'] }) {
+    const showRaw = showRawForIndex === index;
+    const z = cards.zoning;
+    const o = cards.overlays;
+    const a = cards.assessor;
+
+    const isRenderable = (s: string) => s !== 'skipped' && s !== 'address_multiple';
+    const anySection = isRenderable(z.status) || isRenderable(o.status) || isRenderable(a.status);
+
+    // General Q&A (all sections skipped) or the address-picker prompt: render the
+    // narrative as a plain chat bubble; the picker itself renders separately.
+    if (!anySection) {
+      return (
+        <div className="max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
+          <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          </div>
+        </div>
+      );
+    }
+
+    const jurisdiction = cards.jurisdiction ?? null;
+    const showCountyViewers = shouldShowCountyViewers(jurisdiction);
+    const cityViewer = getViewerUrlForJurisdiction(jurisdiction);
+
+    const apn = cards.apn;
+    const ain = a.card?.ain != null ? String(a.card.ain) : undefined;
+    const assessorAin = ain ?? apn;
+
+    const zoningData = z.status === 'success' && z.card ? buildZoningData(z.card) : null;
+    const assessorData = a.status === 'success' && a.card ? buildAssessorData(a.card) : null;
+    const groupedOverlays =
+      o.status === 'success' && o.groups ? buildGroupedFromCards(o.groups, jurisdiction ?? undefined) : null;
+
+    const buildCopyAll = () => {
+      const blocks: string[] = [];
+      if (zoningData) {
+        blocks.push('Zoning');
+        blocks.push(...Object.entries(zoningData).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`));
+        blocks.push('');
+      }
+      if (groupedOverlays) {
+        blocks.push(buildGroupedOverlaysCopyText(groupedOverlays));
+        blocks.push('');
+      }
+      if (assessorData) {
+        blocks.push('Assessor');
+        blocks.push(...Object.entries(assessorData).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`));
+      }
+      return blocks.length ? blocks.join('\n').trim() : text;
+    };
+
+    const viewerLinkClass =
+      'inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline';
+
+    return (
+      <div className="w-full max-w-[80%] space-y-3">
+        {/* header row: chips + viewer links + actions */}
+        <div className="flex flex-wrap gap-2 items-center">
+          {apn && <Chip>APN: {formatApnDisplay(apn)}</Chip>}
+          {ain && <Chip>AIN: {ain}</Chip>}
+
+          {cityViewer && (
+            <a href={cityViewer.url} target="_blank" rel="noreferrer" className={viewerLinkClass} title={`Open ${cityViewer.name}`}>
+              {cityViewer.name} ↗
+            </a>
+          )}
+
+          {assessorAin && (
+            <a href={assessorParcelUrl(assessorAin)} target="_blank" rel="noreferrer" className={viewerLinkClass} title="Open Assessor Portal">
+              Assessor ↗
+            </a>
+          )}
+
+          {showCountyViewers && (
+            <>
+              <a href={znetViewerUrl} target="_blank" rel="noreferrer" className={viewerLinkClass} title="Open ZNET Viewer">
+                ZNET ↗
+              </a>
+              <a href={gisnetViewerUrl} target="_blank" rel="noreferrer" className={viewerLinkClass} title="Open GISNET">
+                GISNET ↗
+              </a>
+            </>
+          )}
+
+          <div className="ml-auto flex gap-2">
+            <button
+              type="button"
+              onClick={() => handleCopy('all', buildCopyAll())}
+              className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
+                copiedSection === 'all'
+                  ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100'
+                  : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+              }`}
+              title="Copy entire response to clipboard"
+            >
+              {copiedSection === 'all' ? '✓ Copied!' : 'Copy All'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                downloadFile(
+                  'lafires-reply.json',
+                  JSON.stringify({ apn: cards.apn ?? null, cards, content: text, metadata: metadata ?? null }, null, 2)
+                )
+              }
+              className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+              title="Download response as JSON file"
+            >
+              Download JSON
+            </button>
+          </div>
+        </div>
+
+        {metadata?.queriedAt && (
+          <p className="text-xs text-slate-400 dark:text-slate-500">
+            Retrieved {new Date(metadata.queriedAt).toLocaleString()}
+          </p>
+        )}
+
+        {/* LLM narrative answer (streams in) rendered above the data cards */}
+        {text.trim() && (
+          <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+          </div>
+        )}
+
+        {/* Zoning */}
+        {isRenderable(z.status) &&
+          (zoningData ? (
+            <SectionCard
+              title="Zoning"
+              data={zoningData}
+              sectionKey="zoning"
+              copiedSection={copiedSection}
+              onCopy={() =>
+                handleCopy(
+                  'zoning',
+                  `Zoning\n${Object.entries(zoningData)
+                    .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
+                    .join('\n')}`
+                )
+              }
+            />
+          ) : (
+            <SectionMessageCard title="Zoning" message={z.message} />
+          ))}
+
+        {/* Overlays */}
+        {isRenderable(o.status) &&
+          (groupedOverlays ? (
+            <GroupedOverlaysCard
+              data={groupedOverlays}
+              copiedSection={copiedSection}
+              onCopy={() => handleCopy('overlays', buildGroupedOverlaysCopyText(groupedOverlays))}
+            />
+          ) : (
+            <SectionMessageCard title="Overlays" message={o.message} />
+          ))}
+
+        {/* Assessor */}
+        {isRenderable(a.status) &&
+          (assessorData ? (
+            <SectionCard
+              title="Assessor"
+              data={assessorData}
+              sectionKey="assessor"
+              copiedSection={copiedSection}
+              onCopy={() =>
+                handleCopy(
+                  'assessor',
+                  `Assessor\n${Object.entries(assessorData)
+                    .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
+                    .join('\n')}`
+                )
+              }
+            />
+          ) : (
+            <SectionMessageCard title="Assessor" message={a.message} />
+          ))}
+
+        {/* raw text toggle (raw = the LLM narrative content) */}
+        <button
+          type="button"
+          onClick={() => setShowRawForIndex(showRaw ? null : index)}
+          className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
+                     bg-slate-200 dark:bg-slate-700
+                     text-slate-700 dark:text-slate-200
+                     hover:bg-slate-300 dark:hover:bg-slate-600
+                     transition-colors min-h-[44px]"
+          title={showRaw ? 'Hide raw response' : 'Show raw response'}
+        >
+          <span>{showRaw ? '▼' : '▶'}</span>
+          <span>{showRaw ? 'Hide raw text' : 'Show raw text'}</span>
+        </button>
+
+        {showRaw && (
+          <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+            <pre className="whitespace-pre-wrap text-xs">{text}</pre>
+          </div>
+        )}
+      </div>
+    );
+  }
+
 return (
   <div className="flex flex-col flex-1 min-h-0">
     {/* scrolling message area */}
@@ -1188,8 +1517,11 @@ return (
                 {message.content}
               </ReactMarkdown>
             </div>
+          ) : message.cards ? (
+            /* Phase 1: render structured cards directly */
+            <CardsBubble text={message.content} cards={message.cards} index={index} metadata={message.metadata} />
           ) : (
-            /* FIX #38: Pass metadata to AssistantBubble */
+            /* Legacy fallback: parse cards out of the assistant prose */
             <AssistantBubble text={message.content} index={index} metadata={message.metadata} />
           )}
         </div>
