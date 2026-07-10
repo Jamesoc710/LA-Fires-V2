@@ -1000,10 +1000,10 @@ export async function lookupUniversalHazards(
   
   for (const result of results) {
     if (result.status === "fulfilled" && result.value) {
-      const { label, url, features } = result.value;
-      
+      const { url, features } = result.value;
+
       for (const feat of features) {
-        const card = createUniversalHazardCard(label, url, feat.attributes || {});
+        const card = classifyUniversalHazard(url, feat.attributes || {});
         if (card) {
           overlays.push(card);
         }
@@ -1046,74 +1046,112 @@ function inferUniversalHazardLabel(url: string): string {
 }
 
 /**
- * Create an OverlayCard for universal hazard features
+ * Universal (state/federal) hazard layer kinds shared by the city and county flows.
  */
-function createUniversalHazardCard(
-  label: string,
+type UniversalHazardKind = "fault" | "liquefaction" | "landslide" | "tsunami" | "coastal";
+
+/**
+ * Detect which universal hazard layer a feature belongs to, using the UNION of the
+ * URL- and attribute-based heuristics that previously lived in the city
+ * (`createUniversalHazardCard`) and county (`lookupOverlays`) paths.
+ * Returns null if the feature is not one of the recognized universal hazard layers.
+ */
+function detectUniversalHazardKind(
   url: string,
-  attributes: Record<string, any>
-): OverlayCard | null {
-  const urlLower = url.toLowerCase();
-  
+  attributes: Record<string, any>,
+): UniversalHazardKind | null {
+  const urlLower = (url || "").toLowerCase();
+
   // Fault Zone (Alquist-Priolo)
-  if (label === "Fault Zone" || urlLower.includes("/hazards/mapserver/5")) {
-    const zoneType = attributes.ZONE_TYPE || attributes.CA_MAP_LEGEND || "Fault Zone";
-    const quadName = attributes.QUAD_NAME;
-    return {
-      source: "County",
-      program: "Other",
-      name: "Alquist-Priolo Fault Zone",
-      details: quadName ? `${zoneType} (${quadName})` : zoneType,
-      attributes,
-    };
+  if (urlLower.includes("hazards/mapserver/5") || String(attributes?.ZONE_TYPE ?? "").includes("Fault")) {
+    return "fault";
   }
-  
   // Liquefaction Zone
-  if (label === "Liquefaction Zone" || urlLower.includes("/hazards/mapserver/9")) {
-    return {
-      source: "County",
-      program: "Other",
-      name: "Liquefaction Zone",
-      details: "Area susceptible to seismic liquefaction per California Geological Survey",
-      attributes,
-    };
+  if (urlLower.includes("hazards/mapserver/9") || (attributes?.ID !== undefined && urlLower.includes("liquefaction"))) {
+    return "liquefaction";
   }
-  
   // Landslide Zone
-  if (label === "Landslide Zone" || urlLower.includes("/hazards/mapserver/8")) {
-    return {
-      source: "County",
-      program: "Other",
-      name: "Landslide Zone",
-      details: "Area susceptible to earthquake-induced landslides per California Geological Survey",
-      attributes,
-    };
+  if (urlLower.includes("hazards/mapserver/8") || urlLower.includes("landslide")) {
+    return "landslide";
   }
-  
   // Tsunami Inundation Zone
-  if (label === "Tsunami Zone" || urlLower.includes("/hazards/mapserver/7")) {
-    return {
-      source: "County",
-      program: "Other",
-      name: "Tsunami Inundation Zone",
-      details: "Within mapped tsunami inundation area",
-      attributes,
-    };
+  if (urlLower.includes("hazards/mapserver/7") || urlLower.includes("tsunami")) {
+    return "tsunami";
   }
-  
   // Coastal Zone
-  if (label === "Coastal Zone" || urlLower.includes("coastal")) {
-    const county = attributes.COUNTY || "Los Angeles";
-    return {
-      source: "County",
-      program: "Other",
-      name: "California Coastal Zone",
-      details: `Within California Coastal Commission jurisdiction (${county} County)`,
-      attributes,
-    };
+  if (
+    urlLower.includes("coastal_zone") ||
+    urlLower.includes("coastal-zone") ||
+    urlLower.includes("coastal")
+  ) {
+    return "coastal";
   }
-  
+
   return null;
+}
+
+/**
+ * SHARED hazard classifier used by BOTH the city path (`lookupUniversalHazards`)
+ * and the county path (`lookupOverlays`). Produces a normalized OverlayCard for a
+ * universal (state/federal) hazard feature, or null if the feature is not one of the
+ * recognized hazard layers.
+ *
+ * Attributes are sanitized here (previously the city path stored raw attributes and
+ * only the county path sanitized), so both flows now emit consistent, cleaned cards.
+ */
+function classifyUniversalHazard(
+  url: string,
+  attributes: Record<string, any>,
+): OverlayCard | null {
+  const kind = detectUniversalHazardKind(url, attributes);
+  if (!kind) return null;
+
+  const cleanAttrs = sanitizeOverlayAttributes(attributes);
+  const base = { source: "County" as const, program: "Other" as const, attributes: cleanAttrs };
+
+  switch (kind) {
+    case "fault": {
+      // Union: keep the city path's richer ZONE_TYPE/CA_MAP_LEGEND (+ QUAD_NAME) formatting,
+      // falling back to the county path's descriptive default when no attributes exist.
+      const zoneType = attributes.ZONE_TYPE || attributes.CA_MAP_LEGEND;
+      const quadName = attributes.QUAD_NAME;
+      let details: string;
+      if (zoneType) {
+        details = quadName ? `${zoneType} (${quadName})` : String(zoneType);
+      } else if (quadName) {
+        details = String(quadName);
+      } else {
+        details = "Earthquake fault zone - geotechnical study required";
+      }
+      return { ...base, name: "Alquist-Priolo Fault Zone", details };
+    }
+    case "liquefaction":
+      return {
+        ...base,
+        name: "Liquefaction Zone",
+        details: "Area susceptible to seismic liquefaction per California Geological Survey; soil stability investigation required.",
+      };
+    case "landslide":
+      return {
+        ...base,
+        name: "Landslide Zone",
+        details: "Area susceptible to earthquake-induced landslides per California Geological Survey; slope stability investigation required.",
+      };
+    case "tsunami":
+      return {
+        ...base,
+        name: "Tsunami Inundation Zone",
+        details: "Within mapped tsunami inundation area; evacuation planning required.",
+      };
+    case "coastal": {
+      const county = attributes.COUNTY || "Los Angeles";
+      return {
+        ...base,
+        name: "California Coastal Zone",
+        details: `Within California Coastal Commission jurisdiction (${county} County); Coastal Development Permit may be required.`,
+      };
+    }
+  }
 }
 
 
@@ -1358,20 +1396,12 @@ export async function lookupOverlays(
 
         let details: string | undefined = undefined;
 
-        // Detect layer type from URL patterns for Phase 7 layers
-        const urlLower = q.url.toLowerCase();
-        const isFaultZone = urlLower.includes("hazards/mapserver/5") || attrs.ZONE_TYPE?.includes("Fault");
-        const isLiquefactionZone = urlLower.includes("hazards/mapserver/9") || (attrs.ID !== undefined && urlLower.includes("liquefaction"));
-        const isLandslideZone = urlLower.includes("hazards/mapserver/8") || urlLower.includes("landslide");
-        const isTsunamiZone = urlLower.includes("hazards/mapserver/7") || urlLower.includes("tsunami");
-        const isCoastalZone = urlLower.includes("coastal_zone") || urlLower.includes("coastal-zone") || attrs.COUNTY !== undefined && urlLower.includes("coastal");
-
         if (attrs.Type) {
           details = attrs.Type;
         } else if (attrs.HAZ_CLASS) {
           details = `Fire Hazard Class: ${attrs.HAZ_CLASS}`;
-          name = attrs.HAZ_CLASS === "Very High" 
-            ? "Very High Fire Hazard Severity Zone" 
+          name = attrs.HAZ_CLASS === "Very High"
+            ? "Very High Fire Hazard Severity Zone"
             : `Fire Hazard Zone: ${attrs.HAZ_CLASS}`;
           program = "Other";
         } else if (attrs.STATUS?.includes("Hillside")) {
@@ -1384,28 +1414,15 @@ export async function lookupOverlays(
         } else if (attrs.FLOOD_ZONE || attrs.FLD_ZONE) {
           name = `Flood Zone: ${attrs.FLOOD_ZONE || attrs.FLD_ZONE}`;
           program = "Other";
-        }
-        // Phase 7: New hazard layer types
-        else if (isFaultZone) {
-          name = "Alquist-Priolo Fault Zone";
-          details = attrs.ZONE_TYPE ?? attrs.QUAD_NAME ?? "Earthquake fault zone - geotechnical study required";
-          program = "Other";
-        } else if (isLiquefactionZone) {
-          name = "Liquefaction Zone";
-          details = "Seismic hazard zone - soil stability investigation required";
-          program = "Other";
-        } else if (isLandslideZone) {
-          name = "Landslide Zone";
-          details = "Seismic hazard zone - slope stability investigation required";
-          program = "Other";
-        } else if (isTsunamiZone) {
-          name = "Tsunami Inundation Zone";
-          details = "Coastal hazard zone - evacuation planning required";
-          program = "Other";
-        } else if (isCoastalZone) {
-          name = "California Coastal Zone";
-          details = attrs.COUNTY ? `County: ${attrs.COUNTY}` : "Coastal Development Permit may be required";
-          program = "Other";
+        } else {
+          // Phase 7 universal hazard layers (fault, liquefaction, landslide, tsunami, coastal)
+          // now share a single classifier with the city path.
+          const hazardCard = classifyUniversalHazard(q.url, attrs);
+          if (hazardCard) {
+            name = hazardCard.name;
+            details = hazardCard.details;
+            program = hazardCard.program;
+          }
         }
 
         return {
