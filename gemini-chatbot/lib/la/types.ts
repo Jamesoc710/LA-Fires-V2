@@ -110,6 +110,94 @@ export interface StandardizedZoningCard {
   zoneDescription?: string;
   generalPlan?: string;
   generalPlanDescription?: string;
-  communityPlanArea?: string;
+  /** Community or planning area (createZoningCard emits this as `planningArea`) */
+  planningArea?: string;
   specificPlan?: string;
 }
+
+// ---------------------------------------------------------
+// Structured chat API contract (Phase 1)
+// The server returns these cards directly so the client
+// never has to reconstruct them from LLM prose.
+// ---------------------------------------------------------
+
+export type SectionStatus =
+  | "success"
+  | "no_data"
+  | "error"
+  | "not_configured"
+  | "not_implemented"
+  | "address_multiple"
+  | "skipped"; // section not requested by the user's query
+
+export type OverlayCategory =
+  | "Hazards"
+  | "Environmental Protection"
+  | "Development Regulations"
+  | "Historic Preservation"
+  | "Supplemental Use Districts"
+  | "Community Standards"
+  | "Land Use & Planning"
+  | "Additional Overlays";
+
+export type OverlayGroupItem = {
+  name: string;
+  details?: string;
+  source: OverlaySource;
+  program: OverlayProgram;
+};
+
+export type OverlayGroupCard = {
+  category: OverlayCategory;
+  items: OverlayGroupItem[];
+};
+
+/** Mirrors the field names returned by lookupAssessor in fetchers.ts */
+export type AssessorCard = {
+  ain?: string | number;
+  apn?: string;
+  situs?: string;
+  city?: string;
+  zip?: string;
+  use?: string;
+  livingArea?: number | null;
+  yearBuilt?: number | string | null;
+  lotSqft?: number | null;
+  units?: number | string | null;
+  bedrooms?: number | string | null;
+  bathrooms?: number | string | null;
+  links?: Record<string, string | undefined>;
+};
+
+export type AddressMatch = {
+  address: string;
+  city: string;
+  zip: string;
+  apn: string;
+};
+
+export type ParcelCards = {
+  apn?: string;
+  jurisdiction?: string;
+  resolvedAddress?: { address: string; apn: string };
+  /** Present (length > 1) when the user must pick between multiple address matches */
+  addressMatches?: AddressMatch[];
+  zoning: {
+    status: SectionStatus;
+    message?: string;
+    card?: StandardizedZoningCard;
+    links?: Record<string, string | undefined>;
+  };
+  overlays: {
+    status: SectionStatus;
+    message?: string;
+    groups?: OverlayGroupCard[];
+    links?: Record<string, string | undefined>;
+  };
+  assessor: {
+    status: SectionStatus;
+    message?: string;
+    card?: AssessorCard;
+    links?: Record<string, string | undefined>;
+  };
+};

@@ -2,6 +2,8 @@
 // Phase 5A: Standardize Zoning Card Fields Across Jurisdictions
 // Fixes #32, #33, #34
 
+import type { StandardizedZoningCard } from "./types";
+
 /* -------------------------------------------------------------------------- */
 /*                            NORMALIZED INTERFACES                           */
 /* -------------------------------------------------------------------------- */
@@ -120,7 +122,7 @@ function findField(data: RawZoningData, fieldList: string[]): string | null {
 /**
  * Check if a value is meaningful (not null, empty, or placeholder).
  */
-function isValidValue(val: any): boolean {
+function isValidValue(val: any): val is string | number {
   if (val == null) return false;
   if (typeof val !== 'string' && typeof val !== 'number') return false;
   
@@ -358,8 +360,8 @@ export function formatZoningForContext(zoning: NormalizedZoning): string {
  * Create a sanitized card object for tool context JSON.
  * Excludes raw data and only includes meaningful fields.
  */
-export function createZoningCard(zoning: NormalizedZoning): Record<string, any> {
-  const card: Record<string, any> = {
+export function createZoningCard(zoning: NormalizedZoning): StandardizedZoningCard {
+  const card: StandardizedZoningCard = {
     jurisdiction: zoning.jurisdiction,
     zone: zoning.zone,
   };
