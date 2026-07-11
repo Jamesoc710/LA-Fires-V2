@@ -43,10 +43,10 @@ const COVERAGE = [
 
 const UNDER_THE_HOOD = [
   { k: "Stack", v: "Next.js + TypeScript on Vercel" },
-  { k: "Data layer", v: "15+ ArcGIS REST integrations across LA County, LA City, and Pasadena services" },
+  { k: "Data layer", v: "25+ ArcGIS REST integrations across LA County, LA City, Pasadena, Malibu, Santa Monica, and Arcadia services" },
   { k: "LLM orchestration", v: "OpenRouter with deliberate cross-provider redundancy: Google primary, Anthropic fallback" },
   { k: "Performance", v: "Parallel GIS queries, in-memory caching, rate limiting; conditional context loading cut a standard query from ~175K to ~1.3K tokens" },
-  { k: "Normalization", v: "One field-normalization layer reconciles three jurisdictions' incompatible schemas into a single consistent output" },
+  { k: "Normalization", v: "One field-normalization layer reconciles six jurisdictions' incompatible schemas into a single consistent output" },
   { k: "Reliability", v: "Audit logging distinguishes “no data exists” from “query failed”, so every section shows an honest status instead of a silent gap" },
 ];
 
@@ -130,8 +130,8 @@ export default function LandingPage() {
           <div className="grid grid-cols-2 gap-y-10 border-t border-stone-200 pt-10 sm:grid-cols-4">
             {[
               { target: 1000000, suffix: "+", label: "parcels covered across LA County" },
-              { target: 15, suffix: "+", label: "live government data integrations" },
-              { target: 3, suffix: "", label: "jurisdictions: county, LA City, Pasadena" },
+              { target: 25, suffix: "+", label: "live government data integrations" },
+              { target: 6, suffix: "", label: "jurisdictions across LA County" },
               { target: 7, suffix: "s", prefix: "<", label: "to a sourced answer (about 1.5s cached)" },
             ].map((s, i) => (
               <div

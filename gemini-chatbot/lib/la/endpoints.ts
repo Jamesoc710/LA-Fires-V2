@@ -197,7 +197,25 @@ export function getViewerUrlForJurisdiction(jurisdiction: string | undefined | n
   if (j === "pasadena" || j === "city of pasadena") {
     return { name: "Pasadena Zoning", url: pasadenaZoningViewerUrl };
   }
-  
+
+  // Malibu
+  if (j === "malibu" || j === "city of malibu") {
+    return {
+      name: "Malibu Community Viewer",
+      url: "https://malibucity.maps.arcgis.com/apps/webappviewer/index.html?id=bfe7fbdec2034f8fafc0b99627156b4e",
+    };
+  }
+
+  // Santa Monica
+  if (j === "santa monica" || j === "city of santa monica") {
+    return { name: "Santa Monica GIS", url: "https://gisdata.santamonica.gov/" };
+  }
+
+  // Arcadia
+  if (j === "arcadia" || j === "city of arcadia") {
+    return { name: "Arcadia Zoning Map", url: "https://arcadia.gis.lacounty.gov/zoningmapviewer/" };
+  }
+
   // Unincorporated LA County - no specific link, use ZNET/GISNET
   return null;
 }

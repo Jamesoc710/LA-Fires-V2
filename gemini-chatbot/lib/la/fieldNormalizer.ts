@@ -38,6 +38,8 @@ const ZONE_CODE_FIELDS = [
   'ZONE_NAME', 'ZN_CODE', 'ZN', 'ZONE_TYPE',
   // More variations for different ArcGIS configurations
   'Q', 'HEIGHT_DIST', 'SPEC_COND',
+  // Malibu, Arcadia
+  'MALIBUZONE', 'ZONES',
 ];
 
 // Zone description fields - human-readable zone name
@@ -86,6 +88,20 @@ const CATEGORY_FIELDS = [
 const GEN_CODE_FIELDS = [
   'GEN_CODE', 'GenCode', 'GENCODE', 'gen_code',
 ];
+
+// Malibu zone code -> human-readable description (Malibu's ArcGIS layer has
+// no description field, so we map the code ourselves).
+const MALIBU_ZONE_DESCRIPTIONS: Record<string, string> = {
+  CC: "Community Commercial", CG: "Commercial General", CN: "Commercial Neighborhood",
+  CR: "Commercial Recreation", "CV-1": "Commercial Visitor Serving - 1", "CV-2": "Commercial Visitor Serving - 2",
+  I: "Institutional", MF: "Multifamily Residential", MFBF: "Multifamily Beach Front",
+  MH: "Mobilehome Park", PD: "Planned Development", POS: "Public Open Space",
+  PRF: "Private Recreational Facilities", RD: "Rural Residential (legacy designation)",
+  RR1: "Rural Residential (1-acre minimum lot)", RR2: "Rural Residential (2-acre minimum lot)",
+  RR5: "Rural Residential (5-acre minimum lot)", RR10: "Rural Residential (10-acre minimum lot)",
+  RR20: "Rural Residential (20-acre minimum lot)", RR40: "Rural Residential (40-acre minimum lot)",
+  RVP: "Recreational Vehicle Park", SFL: "Single-Family Low Density", SFM: "Single-Family Medium Density",
+};
 
 /* -------------------------------------------------------------------------- */
 /*                            HELPER FUNCTIONS                                */
@@ -154,16 +170,19 @@ function normalizeJurisdictionName(name: string): string {
 /**
  * Detect jurisdiction type for special field handling.
  */
-type JurisdictionType = 'los_angeles' | 'pasadena' | 'unincorporated' | 'other';
+type JurisdictionType = 'los_angeles' | 'pasadena' | 'malibu' | 'unincorporated' | 'other';
 
 function detectJurisdictionType(jurisdiction: string): JurisdictionType {
   const norm = normalizeJurisdictionName(jurisdiction);
-  
+
   if (norm === 'los angeles' || norm.includes('los angeles')) {
     return 'los_angeles';
   }
   if (norm === 'pasadena' || norm.includes('pasadena')) {
     return 'pasadena';
+  }
+  if (norm === 'malibu' || norm.includes('malibu')) {
+    return 'malibu';
   }
   if (
     norm.includes('unincorporated') ||
@@ -172,7 +191,7 @@ function detectJurisdictionType(jurisdiction: string): JurisdictionType {
   ) {
     return 'unincorporated';
   }
-  
+
   return 'other';
 }
 
@@ -264,7 +283,13 @@ export function normalizeZoningData(
       }
     }
   }
-  
+
+  // Malibu's ArcGIS layer has no description field; map the zone code to a
+  // known description (try exact match, then uppercase).
+  if (!zoneDescription && jurisdictionType === 'malibu' && zone) {
+    zoneDescription = MALIBU_ZONE_DESCRIPTIONS[zone] || MALIBU_ZONE_DESCRIPTIONS[zone.toUpperCase()] || null;
+  }
+
   // Fallback: if we still have no description, use zone code
   if (!zoneDescription && zone) {
     zoneDescription = zone;

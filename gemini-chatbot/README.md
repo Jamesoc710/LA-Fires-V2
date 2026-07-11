@@ -95,7 +95,8 @@ COASTAL_ZONE_QUERY=...
 
 # Optional — per-city zoning/overlay providers, JSON-encoded
 # (see lib/la/providers.ts for the CityProvider shape)
-CITY_PROVIDERS_JSON={"pasadena": {...}}
+# Configured cities: Los Angeles, Pasadena, Malibu, Santa Monica, Arcadia
+CITY_PROVIDERS_JSON={"Pasadena": {...}}
 ```
 
 ## Setup
