@@ -12,6 +12,10 @@ export type {
   StandardizedZoningCard,
 } from "@/lib/la/types";
 
+// Canonical Citation shape lives in lib/rag/municodeIndex; re-export to avoid drift.
+export type { Citation } from "@/lib/rag/municodeIndex";
+import type { Citation } from "@/lib/rag/municodeIndex";
+
 export type Message = {
   /** Stable client-side id (React key + stream targeting). Assigned on create;
    * messages persisted before ids existed get one on rehydrate. */
@@ -54,7 +58,7 @@ export type StreamFrame =
   | {
       type: "meta";
       cards: ParcelCards;
-      citations?: { chapter: string; section: string; url?: string }[];
+      citations?: Citation[];
       metadata: { queriedAt: string; jurisdiction?: string; sources?: string[] };
     }
   | { type: "delta"; text: string }

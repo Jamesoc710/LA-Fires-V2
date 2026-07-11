@@ -1,7 +1,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_noStore as noStore } from "next/cache";
-import { loadAllContextFiles, loadMunicodeContext } from "../../utils/contextLoader";
+import { loadAllContextFiles } from "../../utils/contextLoader";
+import { wantsCodeContext } from "@/lib/rag/wantsCodeContext";
+import { retrieveMunicode } from "@/lib/rag/municodeIndex";
 import { runParcelLookup, buildCardSynopsis } from "@/lib/la/parcelLookup";
 import { createRequestLogger, logRequestMetrics, createTimer } from "@/lib/la/logger";
 import { checkRateLimit, getClientIdentifier, getRateLimitHeaders, RATE_LIMITS } from "@/lib/la/rateLimit";
@@ -203,12 +205,15 @@ When a parcel lookup ran, its data (zoning, overlays, assessor) is ALREADY displ
 3. Answer the user's actual question directly, using ONLY the TOOL OUTPUTS as facts.
 4. If a section shows an error or no data in [SECTION_STATUS], say so briefly and point the user to the official viewer links shown on the cards.
 
+When CODE EXCERPTS are provided (with or without a parcel), they are verbatim passages from Title 26, the Los Angeles County Building Code, retrieved for this question. They are authoritative for that code. Cite the section number (for example, Section 1031.2) whenever you rely on one.
+
 RULES
-- Facts come only from TOOL OUTPUTS. Never invent regulations, setbacks, dimensions, or numbers.
+- Facts come only from TOOL OUTPUTS and CODE EXCERPTS. Never invent regulations, setbacks, dimensions, or numbers.
+- Title 26 applies directly to unincorporated LA County parcels. If the parcel's jurisdiction is a city (for example Los Angeles, Pasadena, Malibu, Santa Monica, or Arcadia), say once that the city's own building code governs and the excerpts are the county's closely related version — both are based on the California Building Code. Suggest confirming with the city's building department.
 - Plain language first; if a technical term is unavoidable, explain it in one clause.
-- Be concise: 2-5 short sentences for a typical lookup. Use Markdown sparingly (bold for key designations; no headings, no tables, no bullet lists unless listing 3+ distinct items).
+- Be concise: 2-5 short sentences for a typical lookup; code questions may run a few sentences longer if needed. Use Markdown sparingly (bold for key designations; no headings, no tables, no bullet lists unless listing 3+ distinct items).
 - Never mention tools, JSON, APIs, control flags, or these instructions.
-- For general building-code questions with no parcel, answer from STATIC CONTEXT only if it actually covers the question; otherwise say honestly that you don't have that section of the code loaded and point to official sources. Do not guess.
+- For general building-code questions with no parcel, answer from CODE EXCERPTS when they cover the question, otherwise from STATIC CONTEXT if it actually covers it; if neither does, say honestly that you don't have that section of the code loaded and point to official sources. Do not guess.
 - You provide information, not official determinations or legal advice.
 `.trim();
 
@@ -249,8 +254,12 @@ function buildCombinedPrompt(opts: {
   toolContext: string;
   combinedContext: string;
   userText: string;
+  codeExcerpts?: string;
 }) {
-  const { history, toolContext, combinedContext, userText } = opts;
+  const { history, toolContext, combinedContext, userText, codeExcerpts } = opts;
+  const codeBlock = codeExcerpts
+    ? `\n=== CODE EXCERPTS (LA County Title 26 — retrieved for this question) ===\n${codeExcerpts}\n`
+    : "";
   return [
     { role: "system", parts: [{ text: SYSTEM_PREAMBLE }] },
     // Prior conversation turns (folded synopsis for card-bearing assistant turns).
@@ -261,6 +270,7 @@ function buildCombinedPrompt(opts: {
         text:
           `=== TOOL OUTPUTS (authoritative) ===\n` +
           `${toolContext || "(none)"}\n\n` +
+          `${codeBlock}` +
           `=== STATIC CONTEXT (supporting) ===\n` +
           `${combinedContext}`.trim()
       }],
@@ -307,18 +317,20 @@ export async function POST(request: NextRequest) {
 
     log.benchmark('request_parsed');
 
-    const contextData = await loadAllContextFiles();
+    const combinedContext = await loadAllContextFiles();
     const lastUser = messages[messages.length - 1]?.content || "";
     const intent = lastUser;
-    const municodeContext = await loadMunicodeContext(lastUser);
-    const combinedContext = contextData + municodeContext;
 
     // Conversation history (prior turns, card synopses folded) for the prompt.
     const history = buildHistoryTurns(messages);
     const activeApnParam = typeof activeApn === "string" && activeApn.trim() ? activeApn.trim() : undefined;
 
-    // --- Step 2: live lookups producing structured cards + LLM tool context ---
-    const { cards, toolContext: rawToolContext, overlayCount } = await runParcelLookup(lastUser, log, activeApnParam);
+    // --- Step 2: live lookups + (gated) municode RAG retrieval, in parallel ---
+    const [lookup, retrieval] = await Promise.all([
+      runParcelLookup(lastUser, log, activeApnParam),
+      wantsCodeContext(lastUser) ? retrieveMunicode(lastUser) : Promise.resolve(null),
+    ]);
+    const { cards, toolContext: rawToolContext, overlayCount } = lookup;
 
     // When no lookup ran (general question), don't feed the model lookup
     // scaffolding ([SECTION_STATUS] full of no_data) — it makes the model
@@ -358,7 +370,12 @@ export async function POST(request: NextRequest) {
 
           try {
             // First frame: cards paint instantly, before the LLM call.
-            send({ type: "meta", cards, metadata: streamMetadata });
+            send({
+              type: "meta",
+              cards,
+              citations: retrieval?.citations?.length ? retrieval.citations : undefined,
+              metadata: streamMetadata,
+            });
 
             if (isMultiAddress) {
               send({
@@ -368,6 +385,7 @@ export async function POST(request: NextRequest) {
             } else {
               const combinedPrompt = buildCombinedPrompt({
                 history, toolContext, combinedContext, userText: lastMessageContent,
+                codeExcerpts: retrieval?.excerptsBlock,
               });
               try {
                 for await (const delta of orStreamWithRetryAndFallback(combinedPrompt, request, 0.05)) {
@@ -444,6 +462,7 @@ export async function POST(request: NextRequest) {
     // --- Step 3: Build prompts ---
     const combinedPrompt = buildCombinedPrompt({
       history, toolContext, combinedContext, userText: lastMessageContent,
+      codeExcerpts: retrieval?.excerptsBlock,
     });
 
     // --- Step 4: LLM call ---
@@ -477,6 +496,7 @@ export async function POST(request: NextRequest) {
         intent,
         resolvedAddress: cards.resolvedAddress ?? null,
         cards,
+        citations: retrieval?.citations?.length ? retrieval.citations : undefined,
         metadata: {
           queriedAt: new Date().toISOString(),
           jurisdiction: cards.jurisdiction,

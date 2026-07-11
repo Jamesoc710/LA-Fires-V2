@@ -69,33 +69,3 @@ export async function loadAllContextFiles(): Promise<string> {
     return '';
   }
 }
-
-// NEW: Targeted lookup for municode queries
-// Only loads municode when user specifically asks about building codes
-export async function loadMunicodeContext(query: string): Promise<string> {
-  // Only load if query mentions Title 22, Title 26, building code, zoning code, etc.
-  const needsMunicode = /\b(title\s*(22|26)|building\s*code|zoning\s*code|municode|ordinance|appendix\s*a)\b/i.test(query);
-  
-  if (!needsMunicode) {
-    return '';
-  }
-  
-  try {
-    const municodePath = path.join(process.cwd(), 'context', 'municode_title_26.txt');
-    if (!fs.existsSync(municodePath)) {
-      return '';
-    }
-    
-    const content = fs.readFileSync(municodePath, 'utf8');
-    
-    // For now, return a truncated version - ideally you'd implement search/RAG here
-    // Return first 20K chars (~5K tokens) as a reasonable subset
-    const truncated = content.slice(0, 20000);
-    console.log(`[contextLoader] Loaded municode (truncated to ${(truncated.length / 1024).toFixed(1)} KB)`);
-    
-    return `\n\n=== LA COUNTY BUILDING CODE REFERENCE (partial) ===\n${truncated}\n[Note: Showing excerpt. For complete code, see municode.com]`;
-  } catch (error) {
-    console.error('Error loading municode:', error);
-    return '';
-  }
-}
