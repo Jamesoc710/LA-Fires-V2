@@ -13,6 +13,9 @@ export type {
 } from "@/lib/la/types";
 
 export type Message = {
+  /** Stable client-side id (React key + stream targeting). Assigned on create;
+   * messages persisted before ids existed get one on rehydrate. */
+  id: string;
   role: 'user' | 'assistant';
   content: string;
   /** Structured parcel data rendered directly as cards (Phase 1 contract) */
