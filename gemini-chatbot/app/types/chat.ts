@@ -30,6 +30,8 @@ export type Message = {
     sources?: string[];
     type?: string; // 'address_picker' when returning multiple address matches
   };
+  /** RAG citations (Title 26 code sections) backing a narrative answer */
+  citations?: Citation[];
 };
 
 export type ChatResponse = {
@@ -42,6 +44,8 @@ export type ChatResponse = {
     address: string;
     apn: string;
   } | null;
+  /** RAG citations (Title 26 code sections) backing the narrative answer */
+  citations?: Citation[];
   metadata?: {
     queriedAt?: string;
     jurisdiction?: string;

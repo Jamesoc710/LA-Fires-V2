@@ -115,6 +115,7 @@ export default function Chat() {
               <CardsBubble
                 text={message.content}
                 cards={message.cards}
+                citations={message.citations}
                 metadata={message.metadata}
                 showRaw={showRawId === message.id}
                 onToggleRaw={() => setShowRawId(showRawId === message.id ? null : message.id)}
@@ -124,7 +125,7 @@ export default function Chat() {
               />
             ) : (
               /* General Q&A reply (no parcel cards): plain markdown bubble */
-              <MarkdownBubble text={message.content} />
+              <MarkdownBubble text={message.content} citations={message.citations} />
             )}
           </div>
         ))}

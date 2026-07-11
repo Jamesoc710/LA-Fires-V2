@@ -1,4 +1,4 @@
-import type { Message, ParcelCards } from '../../types/chat';
+import type { Citation, Message, ParcelCards } from '../../types/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -24,6 +24,7 @@ import {
   type CopiedSection,
 } from './formatters';
 import Chip from './Chip';
+import CitationChips from './CitationChips';
 import MarkdownBubble from './MarkdownBubble';
 import { SectionCard, SectionMessageCard } from './SectionCard';
 import GroupedOverlaysCard from './GroupedOverlaysCard';
@@ -33,6 +34,7 @@ import ParcelNotFoundCard from './ParcelNotFoundCard';
 function CardsBubble({
   text,
   cards,
+  citations,
   metadata,
   showRaw,
   onToggleRaw,
@@ -42,6 +44,7 @@ function CardsBubble({
 }: {
   text: string;
   cards: ParcelCards;
+  citations?: Citation[];
   metadata?: Message['metadata'];
   showRaw: boolean;
   onToggleRaw: () => void;
@@ -60,7 +63,7 @@ function CardsBubble({
   // General Q&A (all sections skipped) or the address-picker prompt: render the
   // narrative as a plain chat bubble; the picker itself renders separately.
   if (!anySection) {
-    return <MarkdownBubble text={text} />;
+    return <MarkdownBubble text={text} citations={citations} />;
   }
 
   // Parcel not found / total lookup failure: every requested section errored
@@ -186,6 +189,9 @@ function CardsBubble({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
         </div>
       )}
+
+      {/* RAG code-section citations backing the narrative */}
+      <CitationChips citations={citations} />
 
       {/* Zoning */}
       {isRenderable(z.status) &&

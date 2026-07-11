@@ -125,7 +125,7 @@ export function useChatStream() {
         const am = frame.cards?.addressMatches;
         if (am && am.length > 1) setAddressMatches(am);
         if (frame.cards?.apn) setActiveApn(frame.cards.apn);
-        ensureAssistant({ cards: frame.cards, metadata: frame.metadata });
+        ensureAssistant({ cards: frame.cards, metadata: frame.metadata, citations: frame.citations });
       } else if (frame.type === 'delta') {
         appendDelta(frame.text);
       } else if (frame.type === 'error') {
@@ -167,6 +167,7 @@ export function useChatStream() {
       role: 'assistant',
       content: data.response || 'Sorry, I could not generate a response.',
       cards: data.cards,
+      citations: data.citations,
       metadata: data.metadata,
     };
     lastAssistantIdRef.current = assistantMessage.id;
