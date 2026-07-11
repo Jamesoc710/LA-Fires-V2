@@ -60,15 +60,15 @@ export function HeroChatDemo() {
 
   return (
     <div
-      className="w-full max-w-lg rounded-2xl border border-stone-200 bg-white shadow-xl shadow-stone-900/5 overflow-hidden text-left"
+      className="w-full max-w-lg rounded-2xl border border-white/10 bg-stone-950 shadow-xl shadow-stone-900/20 overflow-hidden text-left"
       aria-hidden="true"
     >
       {/* window chrome */}
-      <div className="flex items-center gap-1.5 border-b border-stone-100 px-4 py-3">
-        <span className="h-2.5 w-2.5 rounded-full bg-stone-200" />
-        <span className="h-2.5 w-2.5 rounded-full bg-stone-200" />
-        <span className="h-2.5 w-2.5 rounded-full bg-stone-200" />
-        <span className="ml-3 text-xs font-medium text-stone-400">
+      <div className="flex items-center gap-1.5 border-b border-white/10 px-4 py-3">
+        <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
+        <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
+        <span className="ml-3 text-xs font-medium text-stone-500">
           LA Building Codes Assistant
         </span>
       </div>
@@ -76,20 +76,20 @@ export function HeroChatDemo() {
       <div className="p-4 sm:p-5 space-y-3 min-h-[300px]">
         {/* user bubble */}
         <div className="flex justify-end">
-          <div className="rounded-2xl rounded-br-sm bg-blue-600 px-4 py-2.5 text-sm text-white max-w-[85%]">
+          <div className="rounded-2xl rounded-br-sm bg-stone-100 px-4 py-2.5 text-sm text-stone-950 max-w-[85%]">
             {QUESTION.slice(0, typed)}
             {phase === 1 && (
-              <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-white/80 align-middle" />
+              <span className="ml-0.5 inline-block h-4 w-[2px] animate-pulse bg-stone-950/70 align-middle" />
             )}
           </div>
         </div>
 
         {/* thinking dots */}
         {phase === 2 && (
-          <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-stone-100 px-4 py-3 w-fit">
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-400 [animation-delay:0ms]" />
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-400 [animation-delay:120ms]" />
-            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-400 [animation-delay:240ms]" />
+          <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-stone-900 border border-white/10 px-4 py-3 w-fit">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500 [animation-delay:0ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500 [animation-delay:120ms]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-500 [animation-delay:240ms]" />
           </div>
         )}
 
@@ -99,10 +99,10 @@ export function HeroChatDemo() {
             showCards ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3 pointer-events-none"
           }`}
         >
-          <div className="rounded-xl border border-stone-200 bg-stone-50 p-4">
+          <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
             <div className="mb-2 flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-stone-900">Zoning</h4>
-              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+              <h4 className="font-serif text-sm font-semibold text-stone-100">Zoning</h4>
+              <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[11px] text-stone-300">
                 APN 5843-018-021
               </span>
             </div>
@@ -115,8 +115,8 @@ export function HeroChatDemo() {
                   }`}
                   style={{ transitionDelay: `${200 + i * 120}ms` }}
                 >
-                  <dt className="font-medium text-stone-500">{k}</dt>
-                  <dd className="text-right text-stone-800">{v}</dd>
+                  <dt className="text-[10px] uppercase tracking-wider font-medium text-stone-500">{k}</dt>
+                  <dd className="text-right font-mono text-stone-200">{v}</dd>
                 </div>
               ))}
             </dl>
@@ -133,7 +133,7 @@ export function HeroChatDemo() {
           {HAZARD_CHIPS.map((c) => (
             <span
               key={c}
-              className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-800"
+              className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium text-amber-300"
             >
               ⚠ {c}
             </span>

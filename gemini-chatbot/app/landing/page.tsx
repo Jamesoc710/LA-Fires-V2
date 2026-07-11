@@ -71,7 +71,7 @@ export default function LandingPage() {
               <div className="mt-8 flex flex-wrap items-center gap-3">
                 <Link
                   href="/chat"
-                  className="rounded-lg bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                  className="rounded-lg bg-stone-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-stone-700"
                 >
                   Look up your parcel
                 </Link>
@@ -137,7 +137,7 @@ export default function LandingPage() {
             ].map((s, i) => (
               <div key={s.label} className="bg-white p-6 sm:p-8">
                 <Reveal delay={i * 100}>
-                  <div className="text-3xl font-semibold tabular-nums tracking-tight text-blue-600 sm:text-4xl">
+                  <div className="text-3xl font-semibold tabular-nums tracking-tight text-amber-600 sm:text-4xl">
                     <StatCounter target={s.target} suffix={s.suffix} />
                   </div>
                   <p className="mt-2 text-sm leading-snug text-stone-500">{s.label}</p>
@@ -218,7 +218,7 @@ export default function LandingPage() {
           </p>
           <Link
             href="/chat"
-            className="mt-8 inline-block rounded-lg bg-blue-600 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            className="mt-8 inline-block rounded-lg bg-stone-900 px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-stone-700"
           >
             Look up your parcel
           </Link>

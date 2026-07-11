@@ -6,14 +6,17 @@ import Chat from '../components/Chat';
 
 export default function ChatPage() {
   return (
-    <main className="flex h-dvh flex-col overflow-hidden bg-white">
-      <header className="border-b border-stone-200 bg-white/90 px-4 py-3 backdrop-blur">
+    <main className="dark flex h-dvh flex-col overflow-hidden bg-stone-950 text-stone-100">
+      <header className="border-b border-white/10 bg-stone-950/90 px-4 py-3 backdrop-blur">
         <div className="flex items-baseline justify-between">
           <div>
-            <Link href="/landing" className="text-lg font-semibold tracking-tight text-stone-900 hover:text-stone-600 transition">
+            <Link
+              href="/landing"
+              className="font-serif text-lg font-medium tracking-tight text-stone-100 transition hover:text-amber-300"
+            >
               LA Building Codes Assistant
             </Link>
-            <p className="text-xs text-stone-400">A project from IF Lab</p>
+            <p className="text-xs text-stone-500">A project from IF Lab</p>
           </div>
         </div>
       </header>

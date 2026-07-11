@@ -324,7 +324,7 @@ function parseAssistantText(text: string): ParsedReply | null {
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center rounded-full bg-slate-200 dark:bg-slate-600 text-slate-800 dark:text-slate-100 px-2 py-0.5 text-xs font-medium">
+    <span className="inline-flex items-center rounded-full bg-white/5 border border-white/10 text-stone-300 px-2 py-0.5 text-xs font-mono font-medium">
       {children}
     </span>
   );
@@ -448,13 +448,13 @@ function SectionCard({
   const source = DATA_SOURCES[title];
 
   return (
-    <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
+    <div className="rounded-2xl bg-white/[0.04] border border-white/10 text-stone-200 p-4">
       <div className="flex items-center justify-between mb-2">
         {/* FIX #37: Title with source attribution */}
         <div>
-          <h3 className="text-base font-semibold">{title}</h3>
+          <h3 className="text-base font-semibold font-serif text-stone-100">{title}</h3>
           {source && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">Source: {source}</p>
+            <p className="text-xs text-stone-500">Source: {source}</p>
           )}
         </div>
         {/* FIX #40: Clearer copy button with section name and confirmation */}
@@ -463,8 +463,8 @@ function SectionCard({
           onClick={onCopy}
           className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
             isCopied 
-              ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
-              : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+              ? 'bg-green-400/10 text-green-300 border border-green-400/20' 
+              : 'bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300'
           }`}
           aria-label={`Copy ${title} section`}
           title={`Copy ${title} section to clipboard`}
@@ -476,11 +476,11 @@ function SectionCard({
         {rows.map(([k, v]) => (
           <div key={k} className="flex">
             {/* FIX #35: Use formatted labels */}
-            <dt className="w-40 shrink-0 text-sm font-semibold text-slate-800 dark:text-slate-200">
+            <dt className="w-40 shrink-0 text-[11px] uppercase tracking-wider text-stone-500 font-medium">
               {formatFieldLabel(k)}:
             </dt>
             {/* FIX #35, #36, #7, #8: Use formatted values */}
-            <dd className="text-sm">{formatFieldValue(k, v)}</dd>
+            <dd className="font-mono text-[13px] text-stone-200">{formatFieldValue(k, v)}</dd>
           </div>
         ))}
       </dl>
@@ -532,12 +532,12 @@ function GroupedOverlaysCard({
   });
 
   return (
-    <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
+    <div className="rounded-2xl bg-white/[0.04] border border-white/10 text-stone-200 p-4">
       <div className="flex items-center justify-between mb-2">
         {/* FIX #37: Title with source attribution */}
         <div>
-          <h3 className="text-base font-semibold">Overlays</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Source: {DATA_SOURCES['Overlays']}</p>
+          <h3 className="text-base font-semibold font-serif text-stone-100">Overlays</h3>
+          <p className="text-xs text-stone-500">Source: {DATA_SOURCES['Overlays']}</p>
         </div>
         {/* FIX #40: Clearer copy button with confirmation */}
         <button
@@ -545,8 +545,8 @@ function GroupedOverlaysCard({
           onClick={onCopy}
           className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
             isCopied 
-              ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
-              : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+              ? 'bg-green-400/10 text-green-300 border border-green-400/20' 
+              : 'bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300'
           }`}
           aria-label="Copy Overlays section"
           title="Copy Overlays section to clipboard"
@@ -558,10 +558,10 @@ function GroupedOverlaysCard({
       {/* Jurisdiction line */}
       {data.jurisdiction && (
         <div className="flex mb-3">
-          <span className="w-40 shrink-0 text-sm font-semibold text-slate-800 dark:text-slate-200">
+          <span className="w-40 shrink-0 text-[11px] uppercase tracking-wider text-stone-500 font-medium">
             JURISDICTION:
           </span>
-          <span className="text-sm">{data.jurisdiction}</span>
+          <span className="font-mono text-[13px] text-stone-200">{data.jurisdiction}</span>
         </div>
       )}
 
@@ -571,16 +571,16 @@ function GroupedOverlaysCard({
           const isPlaceholder = category.items.length === 1 && category.items[0] === 'None found for this parcel';
           return (
             <div key={idx}>
-              <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              <h4 className="text-xs tracking-widest uppercase text-stone-400 font-medium mb-1">
                 {category.name}
               </h4>
               <ul className="space-y-1 ml-1">
                 {category.items.map((item, itemIdx) => (
                   <li 
                     key={itemIdx} 
-                    className={`text-sm flex items-start gap-2 ${isPlaceholder ? 'text-slate-500 dark:text-slate-400 italic' : ''}`}
+                    className={`text-sm flex items-start gap-2 ${isPlaceholder ? 'text-stone-500 italic' : ''}`}
                   >
-                    <span className="text-slate-400 dark:text-slate-500 select-none">•</span>
+                    <span className="text-stone-500 select-none">•</span>
                     <span>{item}</span>
                   </li>
                 ))}
@@ -646,14 +646,14 @@ function buildGroupedFromCards(groups: OverlayGroupCard[] | undefined, jurisdict
 function SectionMessageCard({ title, message }: { title: string; message?: string }) {
   const source = DATA_SOURCES[title];
   return (
-    <div className="rounded-2xl bg-slate-100 dark:bg-slate-700/70 text-slate-900 dark:text-slate-100 ring-1 ring-slate-200 dark:ring-slate-600 p-4">
+    <div className="rounded-2xl bg-white/[0.04] border border-white/10 text-stone-200 p-4">
       <div className="mb-2">
-        <h3 className="text-base font-semibold">{title}</h3>
+        <h3 className="text-base font-semibold font-serif text-stone-100">{title}</h3>
         {source && (
-          <p className="text-xs text-slate-500 dark:text-slate-400">Source: {source}</p>
+          <p className="text-xs text-stone-500">Source: {source}</p>
         )}
       </div>
-      <p className="text-sm text-slate-600 dark:text-slate-300">
+      <p className="text-sm text-stone-400">
         {message || 'None found for this parcel.'}
       </p>
     </div>
@@ -663,10 +663,10 @@ function SectionMessageCard({ title, message }: { title: string; message?: strin
 // FIX #9: Error card for invalid APN or data retrieval failures
 function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }) {
   return (
-    <div className="rounded-2xl bg-orange-50 dark:bg-orange-900/30 text-orange-900 dark:text-orange-100 ring-1 ring-orange-200 dark:ring-orange-700 p-4">
+    <div className="rounded-2xl bg-red-950/50 border border-red-500/30 text-red-300 p-4">
       <div className="flex items-start gap-3">
         <div className="flex-shrink-0">
-          <svg className="h-6 w-6 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="h-6 w-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
         </div>
@@ -688,14 +688,14 @@ function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }
               href="https://portal.assessor.lacounty.gov/"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center text-sm font-medium text-orange-700 dark:text-orange-300 hover:underline"
+              className="inline-flex items-center text-sm font-medium text-amber-300 hover:text-amber-200 hover:underline"
             >
               Look up your APN ↗
             </a>
-            <span className="text-orange-400">|</span>
+            <span className="text-stone-600">|</span>
             <button
               onClick={() => window.location.reload()}
-              className="inline-flex items-center text-sm font-medium text-orange-700 dark:text-orange-300 hover:underline"
+              className="inline-flex items-center text-sm font-medium text-amber-300 hover:text-amber-200 hover:underline"
             >
               Try again
             </button>
@@ -718,17 +718,17 @@ function AddressPicker({
   onCancel: () => void;
 }) {
   return (
-    <div className="rounded-2xl bg-blue-50 dark:bg-blue-900/30 text-blue-900 dark:text-blue-100 ring-1 ring-blue-200 dark:ring-blue-700 p-4 space-y-3">
+    <div className="rounded-2xl bg-white/[0.04] border border-white/10 text-stone-200 p-4 space-y-3">
       <div className="flex items-start gap-3">
         <div className="flex-shrink-0">
-          <svg className="h-6 w-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="h-6 w-6 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </div>
         <div className="flex-1">
-          <h3 className="text-base font-semibold mb-1">Multiple Parcels Found</h3>
-          <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">
+          <h3 className="text-base font-semibold font-serif text-stone-100 mb-1">Multiple Parcels Found</h3>
+          <p className="text-sm text-stone-400 mb-3">
             Select the correct property to continue:
           </p>
         </div>
@@ -739,21 +739,21 @@ function AddressPicker({
           <button
             key={r.apn || idx}
             onClick={() => onSelect(r)}
-            className="w-full text-left p-3 rounded-lg bg-white dark:bg-slate-700 
-                       hover:bg-blue-100 dark:hover:bg-slate-600 
-                       border border-blue-200 dark:border-slate-500 
+            className="w-full text-left p-3 rounded-lg bg-white/[0.02]
+                       hover:bg-white/5
+                       border border-white/10
                        transition-colors group"
           >
             <div className="flex items-start justify-between">
               <div>
-                <div className="font-medium text-slate-900 dark:text-slate-100 group-hover:text-blue-700 dark:group-hover:text-blue-300">
+                <div className="font-medium text-stone-100 group-hover:text-amber-300">
                   {r.address}
                 </div>
-                <div className="text-sm text-slate-500 dark:text-slate-400">
+                <div className="text-sm text-stone-500">
                   {r.city}{r.zip ? `, ${r.zip}` : ''}
                 </div>
               </div>
-              <div className="text-xs font-mono bg-slate-100 dark:bg-slate-600 px-2 py-1 rounded text-slate-600 dark:text-slate-300">
+              <div className="text-xs font-mono bg-white/5 border border-white/10 px-2 py-1 rounded-full text-stone-300">
                 {formatApnDisplay(r.apn)}
               </div>
             </div>
@@ -763,7 +763,7 @@ function AddressPicker({
       
       <button
         onClick={onCancel}
-        className="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-200 hover:underline"
+        className="text-sm text-amber-300 hover:text-amber-200 hover:underline"
       >
         ← Cancel and try a different address
       </button>
@@ -1110,8 +1110,8 @@ function clearChat() {
 
   if (isGeneralQA) {
     return (
-      <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
-        <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+      <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-stone-900 border border-white/10 text-stone-200">
+        <div className="prose prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {parsed?.raw ?? text}
           </ReactMarkdown>
@@ -1133,7 +1133,7 @@ function clearChat() {
             href={cityViewer.url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
             title={`Open ${cityViewer.name}`}
           >
             {cityViewer.name} ↗
@@ -1146,7 +1146,7 @@ function clearChat() {
             href={assessorParcelUrl(parsed.ain)}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+            className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
             title="Open Assessor Portal"
           >
             Assessor ↗
@@ -1160,7 +1160,7 @@ function clearChat() {
               href={znetViewerUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+              className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
               title="Open ZNET Viewer"
             >
               ZNET ↗
@@ -1169,7 +1169,7 @@ function clearChat() {
               href={gisnetViewerUrl}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline"
+              className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
               title="Open GISNET"
             >
               GISNET ↗
@@ -1184,8 +1184,8 @@ function clearChat() {
             onClick={() => handleCopy('all', buildCopyAll())}
             className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
               copiedSection === 'all' 
-                ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100' 
-                : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+                ? 'bg-green-400/10 text-green-300 border border-green-400/20' 
+                : 'bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300'
             }`}
             title="Copy entire response to clipboard"
           >
@@ -1207,7 +1207,7 @@ function clearChat() {
               };
               downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
             }}
-            className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+            className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300"
             title="Download response as JSON file"
           >
             Download JSON
@@ -1217,7 +1217,7 @@ function clearChat() {
 
       {/* FIX #38: Show query timestamp if available */}
       {metadata?.queriedAt && (
-        <p className="text-xs text-slate-400 dark:text-slate-500">
+        <p className="text-xs text-stone-500">
           Retrieved {new Date(metadata.queriedAt).toLocaleString()}
         </p>
       )}
@@ -1285,9 +1285,8 @@ function clearChat() {
         onClick={() => setShowRawForIndex(showRaw ? null : index)}
         aria-expanded={showRaw}
         className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
-                   bg-slate-200 dark:bg-slate-700
-                   text-slate-700 dark:text-slate-200
-                   hover:bg-slate-300 dark:hover:bg-slate-600
+                   bg-white/5 hover:bg-white/10 border border-white/10
+                   text-stone-300
                    transition-colors min-h-[44px]"
         title={showRaw ? 'Hide raw response' : 'Show raw response'}
       >
@@ -1296,7 +1295,7 @@ function clearChat() {
       </button>
 
       {showRaw && (
-        <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+        <div className="rounded-lg border border-white/10 p-3 bg-white/5">
           <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
         </div>
       )}
@@ -1318,8 +1317,8 @@ function clearChat() {
     // narrative as a plain chat bubble; the picker itself renders separately.
     if (!anySection) {
       return (
-        <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-slate-100">
-          <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+        <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-stone-900 border border-white/10 text-stone-200">
+          <div className="prose prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </div>
         </div>
@@ -1358,7 +1357,7 @@ function clearChat() {
     };
 
     const viewerLinkClass =
-      'inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-100 px-2 py-0.5 text-xs font-medium hover:underline';
+      'inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium';
 
     return (
       <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
@@ -1396,8 +1395,8 @@ function clearChat() {
               onClick={() => handleCopy('all', buildCopyAll())}
               className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
                 copiedSection === 'all'
-                  ? 'bg-green-200 dark:bg-green-700 text-green-800 dark:text-green-100'
-                  : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500'
+                  ? 'bg-green-400/10 text-green-300 border border-green-400/20'
+                  : 'bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300'
               }`}
               title="Copy entire response to clipboard"
             >
@@ -1412,7 +1411,7 @@ function clearChat() {
                   JSON.stringify({ apn: cards.apn ?? null, cards, content: text, metadata: metadata ?? null }, null, 2)
                 )
               }
-              className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-slate-200 dark:bg-slate-600 hover:bg-slate-300 dark:hover:bg-slate-500"
+              className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300"
               title="Download response as JSON file"
             >
               Download JSON
@@ -1421,14 +1420,14 @@ function clearChat() {
         </div>
 
         {metadata?.queriedAt && (
-          <p className="text-xs text-slate-400 dark:text-slate-500">
+          <p className="text-xs text-stone-500">
             Retrieved {new Date(metadata.queriedAt).toLocaleString()}
           </p>
         )}
 
         {/* LLM narrative answer (streams in) rendered above the data cards */}
         {text.trim() && (
-          <div className="prose prose-slate dark:prose-invert prose-sm max-w-none">
+          <div className="prose prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </div>
         )}
@@ -1493,9 +1492,8 @@ function clearChat() {
           onClick={() => setShowRawForIndex(showRaw ? null : index)}
           aria-expanded={showRaw}
           className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
-                     bg-slate-200 dark:bg-slate-700
-                     text-slate-700 dark:text-slate-200
-                     hover:bg-slate-300 dark:hover:bg-slate-600
+                     bg-white/5 hover:bg-white/10 border border-white/10
+                     text-stone-300
                      transition-colors min-h-[44px]"
           title={showRaw ? 'Hide raw response' : 'Show raw response'}
         >
@@ -1504,7 +1502,7 @@ function clearChat() {
         </button>
 
         {showRaw && (
-          <div className="rounded-lg border border-slate-300 dark:border-slate-600 p-3 bg-white/60 dark:bg-slate-800/60">
+          <div className="rounded-lg border border-white/10 p-3 bg-white/5">
             <pre className="whitespace-pre-wrap text-xs">{text}</pre>
           </div>
         )}
@@ -1525,7 +1523,7 @@ return (
           className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
         >
           {message.role === 'user' ? (
-            <div className="max-w-[92%] sm:max-w-[70%] rounded-xl p-4 shadow-md bg-blue-500 text-white">
+            <div className="max-w-[92%] sm:max-w-[70%] rounded-xl p-4 shadow-md bg-stone-100 text-stone-950">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}
               </ReactMarkdown>
@@ -1558,12 +1556,12 @@ return (
           <div
             role="status"
             aria-label="Assistant is thinking"
-            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100"
+            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-stone-900 border border-white/10 text-stone-200"
           >
             <div className="flex space-x-2 items-center">
-              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" />
-              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-              <div className="w-2 h-2 bg-slate-600 dark:bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
+              <div className="w-2 h-2 bg-stone-500 rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+              <div className="w-2 h-2 bg-stone-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
             </div>
           </div>
         </div>
@@ -1573,7 +1571,7 @@ return (
         <div className="flex justify-center">
           <div
             role="alert"
-            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-100"
+            className="max-w-[92%] sm:max-w-[70%] rounded-lg p-3 bg-red-950/50 border border-red-500/30 text-red-300"
           >
             Error: {error}
           </div>
@@ -1589,7 +1587,7 @@ return (
         <button
           key={s}
           onClick={() => setInput(s)}
-          className="mb-2 rounded-full px-3 py-1 text-xs bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-600"
+          className="mb-2 rounded-full px-3 py-1 text-xs bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300"
         >
           {s}
         </button>
@@ -1597,11 +1595,11 @@ return (
     </div>
 
     {/* footer toolbar */}
-    <div className="px-4 pb-2 flex items-center gap-3 text-xs text-slate-500">
+    <div className="px-4 pb-2 flex items-center gap-3 text-xs text-stone-500">
       <button
         type="button"
         onClick={clearChat}
-        className="rounded-md px-2 py-1 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100"
+        className="rounded-md px-2 py-1 bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300"
         title="Clear chat"
       >
         Clear chat
@@ -1610,13 +1608,13 @@ return (
     </div>
 
     {/* FIX #1, #2, #3: Disclaimer block */}
-    <div className="px-4 pb-2 border-t border-slate-200 dark:border-slate-700 pt-2">
-      <p className="text-xs text-slate-500 dark:text-slate-400 text-center leading-relaxed">
-        <span className="font-medium">⚠️ Data shown is for informational purposes only.</span>
+    <div className="px-4 pb-2 border-t border-white/10 pt-2">
+      <p className="text-xs text-stone-500 text-center leading-relaxed">
+        <span className="font-medium text-amber-300">⚠️ Data shown is for informational purposes only.</span>
         {' '}Not an official zoning determination. Some overlay types may not be included. Data may not reflect recent zone changes.
         {' '}Verify all information with the appropriate planning department before making decisions.
       </p>
-      <p className="text-xs text-slate-400 dark:text-slate-500 text-center mt-1">
+      <p className="text-xs text-stone-500 text-center mt-1 opacity-80">
         Contact your local planning department for official determinations.
       </p>
     </div>
@@ -1624,7 +1622,7 @@ return (
     {/* input form */}
     <form
       onSubmit={handleSubmit}
-      className="border-t p-4 sticky bg-white dark:bg-slate-900 z-10"
+      className="border-t border-white/10 p-4 sticky bg-stone-950/90 backdrop-blur z-10"
       style={{ bottom: 'env(safe-area-inset-bottom)' }}
     >
       <div className="flex space-x-2">
@@ -1636,17 +1634,17 @@ return (
           disabled={isLoading}
           placeholder="Enter APN (5843-004-015) or address (3652 Monterosa Dr)…"
           aria-label="Message input"
-          className="flex-1 p-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="flex-1 p-2 rounded-md bg-white/5 border border-white/10 text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400/40 focus:border-amber-400/40 disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={isLoading || !input.trim()}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          className="bg-stone-100 text-stone-950 px-4 py-2 rounded-md hover:bg-white focus:outline-none focus:ring-2 focus:ring-amber-400/40 disabled:bg-white/10 disabled:text-stone-600"
         >
           Send
         </button>
       </div>
-      <p className="mt-1 text-[11px] text-slate-500">
+      <p className="mt-1 text-[11px] text-stone-500">
         Press Enter to send • Supports APN or street address
       </p>
     </form>

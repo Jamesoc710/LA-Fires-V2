@@ -1,11 +1,24 @@
 import type { Metadata, Viewport } from "next";
-import { Inter } from "next/font/google";
+import { Libre_Franklin, Lora, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
+const libreFranklin = Libre_Franklin({
   subsets: ["latin"],
-  display: 'swap',
-  variable: "--font-inter",
+  display: "swap",
+  variable: "--font-libre-franklin",
+});
+
+const lora = Lora({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-lora",
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  display: "swap",
+  variable: "--font-plex-mono",
 });
 
 const SITE_URL = "https://rebuildlaagent.com";
@@ -32,10 +45,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#2563eb" },
-    { media: "(prefers-color-scheme: dark)", color: "#1e293b" },
-  ],
+  themeColor: "#0c0a09",
 };
 
 export default function RootLayout({
@@ -44,13 +54,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={inter.variable}>
-      <body
-        className={`${inter.variable} antialiased h-screen sm:h-auto`}
-      >
-        <div className="flex flex-col h-full">
-          {children}
-        </div>
+    <html
+      lang="en"
+      className={`${libreFranklin.variable} ${lora.variable} ${plexMono.variable}`}
+    >
+      <body className="antialiased h-screen sm:h-auto">
+        <div className="flex flex-col h-full">{children}</div>
       </body>
     </html>
   );
