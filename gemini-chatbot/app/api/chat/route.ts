@@ -66,7 +66,7 @@ async function callOpenRouter(
 
 async function orWithRetryAndFallback(contents: any[], req: NextRequest, temperature = 0.2) {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-3.1-flash-lite";
-  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-sonnet-4.6";
+  const FALLBACK = process.env.OR_FALLBACK_MODEL || "google/gemini-3.5-flash";
   const plans: [string, number][] = [[PRIMARY, 2], [FALLBACK, 1]];
 
   for (const [model, tries] of plans) {
@@ -163,7 +163,7 @@ async function* orStreamWithRetryAndFallback(
   temperature = 0.2
 ): AsyncGenerator<string> {
   const PRIMARY  = process.env.OR_PRIMARY_MODEL  || "google/gemini-3.1-flash-lite";
-  const FALLBACK = process.env.OR_FALLBACK_MODEL || "anthropic/claude-sonnet-4.6";
+  const FALLBACK = process.env.OR_FALLBACK_MODEL || "google/gemini-3.5-flash";
   const plans: [string, number][] = [[PRIMARY, 2], [FALLBACK, 1]];
 
   let lastErr: unknown = null;
