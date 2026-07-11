@@ -60,7 +60,7 @@ export function HeroChatDemo() {
 
   return (
     <div
-      className="w-full max-w-lg rounded-2xl border border-white/10 bg-stone-950 shadow-xl shadow-stone-900/20 overflow-hidden text-left"
+      className="w-full max-w-lg rounded-2xl border border-white/15 bg-stone-900/60 shadow-2xl shadow-black/50 overflow-hidden text-left"
       aria-hidden="true"
     >
       {/* window chrome */}
@@ -69,7 +69,7 @@ export function HeroChatDemo() {
         <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
         <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
         <span className="ml-3 text-xs font-medium text-stone-500">
-          LA Building Codes Assistant
+          LA Fires Assistant
         </span>
       </div>
 

@@ -10,24 +10,22 @@ export default function Error({
   reset: () => void;
 }) {
   return (
-    <main className="flex h-dvh flex-col items-center justify-center gap-4 bg-white dark:bg-slate-900 px-6 text-center">
-      <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-        Something went wrong
-      </h1>
-      <p className="max-w-md text-slate-600 dark:text-slate-300">
+    <main className="flex h-dvh flex-col items-center justify-center gap-4 bg-stone-950 px-6 text-center text-stone-100">
+      <h1 className="font-serif text-2xl font-semibold">Something went wrong</h1>
+      <p className="max-w-md text-stone-400">
         We hit an unexpected error. Please try again, or head back to the
         homepage if the problem persists.
       </p>
       <div className="flex gap-3">
         <button
           onClick={() => reset()}
-          className="rounded-md bg-blue-600 px-4 py-2 text-white transition hover:bg-blue-700"
+          className="rounded-lg bg-stone-100 px-4 py-2 text-sm font-medium text-stone-950 transition hover:bg-white"
         >
           Try again
         </button>
         <Link
           href="/"
-          className="rounded-md bg-slate-100 dark:bg-slate-800 px-4 py-2 text-slate-800 dark:text-slate-100 transition hover:bg-slate-200 dark:hover:bg-slate-700"
+          className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-stone-300 transition hover:bg-white/10"
         >
           Go home
         </Link>

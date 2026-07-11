@@ -27,17 +27,17 @@ const SITE_DESCRIPTION =
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "LA Building Codes Assistant",
+  title: "LA Fires Assistant",
   description: SITE_DESCRIPTION,
   openGraph: {
-    title: "LA Building Codes Assistant",
+    title: "LA Fires Assistant",
     description: SITE_DESCRIPTION,
     type: "website",
-    siteName: "LA Building Codes Assistant",
+    siteName: "LA Fires Assistant",
   },
   twitter: {
     card: "summary",
-    title: "LA Building Codes Assistant",
+    title: "LA Fires Assistant",
     description: SITE_DESCRIPTION,
   },
 };

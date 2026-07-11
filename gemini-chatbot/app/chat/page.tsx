@@ -14,7 +14,7 @@ export default function ChatPage() {
               href="/landing"
               className="font-serif text-lg font-medium tracking-tight text-stone-100 transition hover:text-amber-300"
             >
-              LA Building Codes Assistant
+              LA Fires Assistant
             </Link>
             <p className="text-xs text-stone-500">A project from IF Lab</p>
           </div>
