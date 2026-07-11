@@ -60,7 +60,7 @@ export function HeroChatDemo() {
 
   return (
     <div
-      className="w-full max-w-lg rounded-2xl border border-white/15 bg-stone-900/60 shadow-2xl shadow-black/50 overflow-hidden text-left"
+      className="w-full max-w-lg rounded-2xl border border-stone-800 bg-stone-950 shadow-2xl shadow-stone-900/25 overflow-hidden text-left"
       aria-hidden="true"
     >
       {/* window chrome */}
