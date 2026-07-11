@@ -915,10 +915,14 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger, acti
     log.error('CHAT', 'Unexpected error in data lookup', { error: String(e) });
   }
 
+  // Sections the user didn't ask for are marked not_requested so the model
+  // doesn't describe them as missing/unavailable in the narrative.
+  const promptStatus = (show: boolean, status: InternalStatus) => (show ? status : "not_requested");
+
   toolContext += `\n\n[SECTION_STATUS]
-ZONING_STATUS: ${zoningStatus}${zoningMessage ? `\nZONING_MESSAGE: ${zoningMessage}` : ''}
-OVERLAYS_STATUS: ${overlaysStatus}${overlaysMessage ? `\nOVERLAYS_MESSAGE: ${overlaysMessage}` : ''}
-ASSESSOR_STATUS: ${assessorStatus}${assessorMessage ? `\nASSESSOR_MESSAGE: ${assessorMessage}` : ''}`;
+ZONING_STATUS: ${promptStatus(SHOW_ZONING, zoningStatus)}${SHOW_ZONING && zoningMessage ? `\nZONING_MESSAGE: ${zoningMessage}` : ''}
+OVERLAYS_STATUS: ${promptStatus(SHOW_OVERLAYS, overlaysStatus)}${SHOW_OVERLAYS && overlaysMessage ? `\nOVERLAYS_MESSAGE: ${overlaysMessage}` : ''}
+ASSESSOR_STATUS: ${promptStatus(SHOW_ASSESSOR, assessorStatus)}${SHOW_ASSESSOR && assessorMessage ? `\nASSESSOR_MESSAGE: ${assessorMessage}` : ''}`;
 
   log.log('CHAT', 'Tool context ready', { length: toolContext.length });
   log.benchmark('tool_context_ready');

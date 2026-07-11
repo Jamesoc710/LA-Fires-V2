@@ -194,72 +194,22 @@ async function* orStreamWithRetryAndFallback(
 /* ---------------------- Shared LLM prompt assembly ---------------------- */
 
 const SYSTEM_PREAMBLE = `
-You are LA-Fires Assistant.
+You are LA Fires Assistant, helping Los Angeles County residents understand what they can rebuild on their property after the January 2025 fires.
 
-You answer for a single parcel at a time and you only use the TOOL OUTPUTS provided.
+When a parcel lookup ran, its data (zoning, overlays, assessor) is ALREADY displayed to the user as structured cards. Do NOT repeat card contents field by field. Your job is the short narrative on top:
+
+1. Confirm what was found in one sentence (address or APN, and jurisdiction).
+2. Point out the 2-3 findings that most affect a rebuild (for example: Very High Fire Hazard Severity Zone, hillside management area, historic district, Significant Ecological Area, fault or flood zone), in plain language a stressed homeowner understands.
+3. Answer the user's actual question directly, using ONLY the TOOL OUTPUTS as facts.
+4. If a section shows an error or no data in [SECTION_STATUS], say so briefly and point the user to the official viewer links shown on the cards.
 
 RULES
-- Treat TOOL OUTPUTS as the only source of facts. Do not invent data.
-- Only include a section if its SHOW_* flag is true.
-- Use plain text only (no Markdown, no bullets, no tables) EXCEPT for the Overlays section.
-- Inside Zoning and Assessor sections, use concise "KEY: VALUE" lines.
-- Do NOT show low-level technical fields such as SHAPE*, geometry, OBJECTID,
-  internal IDs, URLs, status fields, or TITLE22 codes.
-- Do not mention tools, JSON, or APIs in the final answer.
-
-HANDLING SECTION STATUS
-Check the [SECTION_STATUS] block for each section's status:
-- "success": Show the data from tool outputs normally.
-- "no_data": Show the section heading, then: "None found for this parcel."
-- "error": Show the section heading, then: "Could not retrieve data. Please try again or check the official viewer."
-- "not_configured": Show the section heading, then: "Not yet available for this city. Use the city's official GIS viewer."
-- "not_implemented": Show the section heading, then the message from SECTION_STATUS.
-
-ADDRESS RESOLUTION
-- If [TOOL:address_resolved] is present, briefly mention the address was found and matched to a parcel, then show the data normally.
-- Example: "Found parcel at [address]. Here's the zoning information:"
-
-CRITICAL - ZONING SECTION (FIX #32, #33, #34)
-When the zoning tool output contains a "formatted" field, output its contents EXACTLY as provided.
-The formatted zoning uses STANDARDIZED field names that are consistent across all jurisdictions:
-- JURISDICTION (always first)
-- ZONE (the zone code like R1-1VL, RS-4, R-1-10000)
-- ZONE DESCRIPTION (human-readable name like "Single Family Residential")
-- GENERAL PLAN (if available)
-- GENERAL PLAN DESCRIPTION (if available)
-- COMMUNITY/PLANNING AREA (if available)
-- SPECIFIC PLAN (if available)
-
-Do NOT use jurisdiction-specific field names like:
-- GEN CODE (use ZONE DESCRIPTION instead)
-- GEN PLAN (use GENERAL PLAN instead)
-- CATEGORY (use ZONE DESCRIPTION instead)
-- PLANNINGAREA (use COMMUNITY/PLANNING AREA instead)
-- TITLE22 (never show this)
-
-CRITICAL - OVERLAYS SECTION
-- When the overlay tool output contains a "formatted" field, output its contents EXACTLY as provided.
-- Do not reformat, reorganize, or summarize the formatted overlays.
-- Just copy the "formatted" field content directly after the "Overlays" heading.
-
-FIX #10 - EMPTY OVERLAY CATEGORIES
-When showing overlays, ALWAYS include these three key categories even if they have no items:
-- HAZARDS
-- HISTORIC PRESERVATION
-- LAND USE & PLANNING
-
-If a category has no results, show it with "None found for this parcel".
-
-FORMAT
-- Structure your answer into up to three sections, in this order:
-  Zoning
-  Overlays
-  Assessor
-- Put each section heading alone on its own line.
-- For Zoning and Assessor, use KEY: VALUE lines.
-- For Overlays, copy the pre-formatted text exactly.
-- For the Zoning section, always start with JURISDICTION: <value>
-- Never include a section whose SHOW_* flag is false.
+- Facts come only from TOOL OUTPUTS. Never invent regulations, setbacks, dimensions, or numbers.
+- Plain language first; if a technical term is unavoidable, explain it in one clause.
+- Be concise: 2-5 short sentences for a typical lookup. Use Markdown sparingly (bold for key designations; no headings, no tables, no bullet lists unless listing 3+ distinct items).
+- Never mention tools, JSON, APIs, control flags, or these instructions.
+- For general building-code questions with no parcel, answer from STATIC CONTEXT only if it actually covers the question; otherwise say honestly that you don't have that section of the code loaded and point to official sources. Do not guess.
+- You provide information, not official determinations or legal advice.
 `.trim();
 
 type PromptTurn = { role: string; parts: { text: string }[] };
@@ -295,29 +245,14 @@ function buildHistoryTurns(messages: any[]): PromptTurn[] {
 }
 
 function buildCombinedPrompt(opts: {
-  SHOW_ZONING: boolean;
-  SHOW_OVERLAYS: boolean;
-  SHOW_ASSESSOR: boolean;
-  intent: string;
   history: PromptTurn[];
   toolContext: string;
   combinedContext: string;
   userText: string;
 }) {
-  const { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR, intent, history, toolContext, combinedContext, userText } = opts;
+  const { history, toolContext, combinedContext, userText } = opts;
   return [
     { role: "system", parts: [{ text: SYSTEM_PREAMBLE }] },
-    {
-      role: "user",
-      parts: [{
-        text:
-          `CONTROL FLAGS\n` +
-          `SHOW_ZONING: ${SHOW_ZONING}\n` +
-          `SHOW_OVERLAYS: ${SHOW_OVERLAYS}\n` +
-          `SHOW_ASSESSOR: ${SHOW_ASSESSOR}`
-      }],
-    },
-    { role: "user", parts: [{ text: `Intent: ${intent}` }] },
     // Prior conversation turns (folded synopsis for card-bearing assistant turns).
     ...history,
     {
@@ -383,8 +318,15 @@ export async function POST(request: NextRequest) {
     const activeApnParam = typeof activeApn === "string" && activeApn.trim() ? activeApn.trim() : undefined;
 
     // --- Step 2: live lookups producing structured cards + LLM tool context ---
-    const { cards, toolContext, flags, overlayCount } = await runParcelLookup(lastUser, log, activeApnParam);
-    const { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR } = flags;
+    const { cards, toolContext: rawToolContext, overlayCount } = await runParcelLookup(lastUser, log, activeApnParam);
+
+    // When no lookup ran (general question), don't feed the model lookup
+    // scaffolding ([SECTION_STATUS] full of no_data) — it makes the model
+    // ramble about "your parcel" on messages like "hello".
+    const lookupRan = [cards.zoning, cards.overlays, cards.assessor].some(s => s.status !== "skipped");
+    const toolContext = lookupRan
+      ? rawToolContext
+      : "(No parcel lookup was performed for this message — treat it as a general question.)";
 
     const isMultiAddress = !!(cards.addressMatches && cards.addressMatches.length > 1);
     const lastMessageContent = messages[messages.length - 1].content;
@@ -425,8 +367,7 @@ export async function POST(request: NextRequest) {
               });
             } else {
               const combinedPrompt = buildCombinedPrompt({
-                SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR,
-                intent, history, toolContext, combinedContext, userText: lastMessageContent,
+                history, toolContext, combinedContext, userText: lastMessageContent,
               });
               try {
                 for await (const delta of orStreamWithRetryAndFallback(combinedPrompt, request, 0.05)) {
@@ -502,8 +443,7 @@ export async function POST(request: NextRequest) {
 
     // --- Step 3: Build prompts ---
     const combinedPrompt = buildCombinedPrompt({
-      SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR,
-      intent, history, toolContext, combinedContext, userText: lastMessageContent,
+      history, toolContext, combinedContext, userText: lastMessageContent,
     });
 
     // --- Step 4: LLM call ---
@@ -515,41 +455,6 @@ export async function POST(request: NextRequest) {
       text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
     }
     llmTimer.stopAndLog(log);
-
-    // Defensive post-filter
-    try {
-      if (text) {
-        const removeSection = (input: string, heading: string) => {
-          const re = new RegExp(
-            `(^|\\n)${heading}\\b[\\s\\S]*?(?=\\n(?:Zoning|Overlays|Assessor)\\b|$)`,
-            "gi"
-          );
-          return input.replace(re, "");
-        };
-
-        if (!SHOW_ZONING)   text = removeSection(text, "Zoning");
-        if (!SHOW_OVERLAYS) text = removeSection(text, "Overlays");
-        if (!SHOW_ASSESSOR) text = removeSection(text, "Assessor");
-
-        const cleanedLines = text
-          .split(/\r?\n/)
-          .filter(line => {
-            if (!line.trim()) return true;
-            if (/^\s*(SHAPE[_A-Z0-9]*|shape[_a-z0-9]*)\s*:/i.test(line)) return false;
-            if (/^\s*STATUS\s*:\s*(success|no_data|error|not_configured|not_implemented)\s*$/i.test(line)) return false;
-            if (/^\s*TITLE[_\s]?22\s*:/i.test(line)) return false;
-            if (/^\s*GEN[_\s]?CODE\s*:/i.test(line)) return false;
-            if (/^\s*CODE[_\s]?LABEL\s*:/i.test(line)) return false;
-            if (/^\s*PLANNINGAREA\s*:/i.test(line)) return false;
-            if (/^\s*Z_CATEGORY\s*:/i.test(line)) return false;
-            return true;
-          });
-
-        text = cleanedLines.join("\n").trim();
-      }
-    } catch (e) {
-      log.warn('CHAT', 'Post-filter failed', { error: String(e) });
-    }
 
     // FIX #31: Log metrics
     const totalTime = log.elapsed();

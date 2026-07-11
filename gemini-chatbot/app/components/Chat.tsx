@@ -45,11 +45,11 @@ type AddressMatch = {
   apn: string;
 };
 
-/* ------------ tiny utils to parse our assistant text into sections ----------- */
+/* ------------ view models derived from structured cards ----------- */
 
 type SectionData = Record<string, string>;
 
-// Grouped overlay structure
+// Grouped overlay structure (built from cards, rendered by GroupedOverlaysCard)
 type OverlayCategory = {
   name: string;
   items: string[];
@@ -59,267 +59,6 @@ type GroupedOverlays = {
   categories: OverlayCategory[];
 };
 
-type ParsedReply = {
-  raw: string;
-  apn?: string;
-  ain?: string;
-  zoning?: SectionData;
-  overlays?: SectionData;           // legacy flat format
-  groupedOverlays?: GroupedOverlays; // grouped format
-  assessor?: SectionData;
-  // FIX #9: Track if this is an error response
-  isParcelNotFound?: boolean;
-  errorMessage?: string;
-};
-type SectionKind = 'zoning' | 'overlays' | 'assessor' | null;
-
-function sectionKindFrom(line: string): SectionKind {
-  const s = line.trim().toLowerCase().replace(/\*\*/g, '');
-
-  // ignore "section: unknown"
-  if (/^section\s*:\s*unknown\b/.test(s)) return null;
-
-  // Accept "Zoning", "City Zoning", "Section: Zoning", etc.
-  if (/^(section\s*:\s*)?(city\s+)?zoning\s*:?\s*$/.test(s)) return 'zoning';
-
-  // Accept "Overlays", "City Overlays", "Overlay", etc.
-  if (/^(section\s*:\s*)?(city\s+)?overlays?\s*:?\s*$/.test(s)) return 'overlays';
-
-  // Assessor is usually just "Assessor"
-  if (/^(section\s*:\s*)?assessor\s*:?\s*$/.test(s)) return 'assessor';
-
-  return null;
-}
-
-
-function extractKV(line: string): [string, string] | null {
-  // strip leading bullet or dash and stray bold
-  const cleaned = line
-    .replace(/^\s*[-*]\s*/, '')
-    .replace(/^\s*\*\*|\*\*\s*$/g, '')
-    .trim();
-
-  // match KEY: value  (allow spaces, slashes, dots, underscores)
-  const m = cleaned.match(/^([A-Za-z0-9_./\s]+?):\s*(.+)$/);
-  if (!m) return null;
-
-  const key = m[1].trim();
-  const val = m[2].trim();
-  return key && val ? [key, val] : null;
-}
-
-
-function normalizeKey(k: string) {
-  return k
-    .replace(/\s+/g, '_')
-    .replace(/[^\w/.-]/g, '')
-    .toUpperCase();
-}
-
-function addKV(data: SectionData, k: string, v: string) {
-  const norm = normalizeKey(k);
-  let key = norm;
-
-  // if this key already exists, add _2, _3, ...
-  if (data[key] !== undefined) {
-    let i = 2;
-    while (data[`${norm}_${i}`] !== undefined) {
-      i++;
-    }
-    key = `${norm}_${i}`;
-  }
-
-  data[key] = v;
-}
-
-// Check if a line is a category header (e.g., "HAZARDS:", "HISTORIC PRESERVATION:")
-// FIX #11, #12, #13: Extended to recognize new category names
-function isCategoryHeader(line: string): string | null {
-  const trimmed = line.trim();
-  // Match lines like "HAZARDS:", "HISTORIC PRESERVATION:", "ENVIRONMENTAL PROTECTION:" etc.
-  const match = trimmed.match(/^([A-Z][A-Z\s&]+):$/);
-  if (match) {
-    return match[1].trim();
-  }
-  // Also match title case like "Land Use & Planning:", "Environmental Protection:" etc.
-  const titleMatch = trimmed.match(/^([A-Z][a-zA-Z\s&]+):$/);
-  if (titleMatch && !trimmed.includes('—')) {
-    return titleMatch[1].trim();
-  }
-  return null;
-}
-
-// Check if a line is a bullet item
-function isBulletItem(line: string): string | null {
-  const trimmed = line.trim();
-  // Match lines starting with bullet character or dash
-  const match = trimmed.match(/^[•\-\*]\s*(.+)$/);
-  if (match) {
-    return match[1].trim();
-  }
-  return null;
-}
-
-// Parse grouped overlays format
-function parseGroupedOverlays(lines: string[], startIndex: number): { end: number; data: GroupedOverlays } {
-  const data: GroupedOverlays = { categories: [] };
-  let i = startIndex + 1;
-  let currentCategory: OverlayCategory | null = null;
-
-  while (i < lines.length && sectionKindFrom(lines[i]) === null) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    
-    // Check for JURISDICTION line
-    const kvMatch = extractKV(line);
-    if (kvMatch && kvMatch[0].toUpperCase() === 'JURISDICTION') {
-      data.jurisdiction = kvMatch[1];
-      i++;
-      continue;
-    }
-
-    // Check for category header
-    const categoryName = isCategoryHeader(line);
-    if (categoryName) {
-      // Save previous category if exists
-      if (currentCategory && currentCategory.items.length > 0) {
-        data.categories.push(currentCategory);
-      }
-      currentCategory = { name: categoryName, items: [] };
-      i++;
-      continue;
-    }
-
-    // Check for bullet item
-    const bulletItem = isBulletItem(line);
-    if (bulletItem && currentCategory) {
-      currentCategory.items.push(bulletItem);
-      i++;
-      continue;
-    }
-
-    // Skip empty lines
-    if (!trimmed) {
-      i++;
-      continue;
-    }
-
-    i++;
-  }
-
-  // Don't forget the last category
-  if (currentCategory && currentCategory.items.length > 0) {
-    data.categories.push(currentCategory);
-  }
-
-  return { end: i, data };
-}
-
-// Check if overlays section uses grouped format
-function isGroupedOverlayFormat(lines: string[], startIndex: number): boolean {
-  // Look ahead to see if we find category headers or bullets
-  for (let i = startIndex + 1; i < Math.min(startIndex + 10, lines.length); i++) {
-    if (sectionKindFrom(lines[i]) !== null) break;
-    if (isCategoryHeader(lines[i])) return true;
-    if (isBulletItem(lines[i])) return true;
-  }
-  return false;
-}
-
-
-function parseAssistantText(text: string): ParsedReply | null {
-  if (!text) return null;
-  const lines = text.split(/\r?\n/);
-
-  const parsed: ParsedReply = { raw: text };
-
-  // FIX #9: Detect parcel not found or retrieval errors
-  const lowerText = text.toLowerCase();
-  
-  // Check for various error patterns
-  const isParcelError = (
-    // Direct "not found" patterns
-    (lowerText.includes('parcel') && lowerText.includes('not found')) ||
-    (lowerText.includes('no parcel found')) ||
-    // APN verification errors
-    (lowerText.includes('apn') && lowerText.includes('verify')) ||
-    (lowerText.includes('apn') && lowerText.includes('correct')) ||
-    // All three sections showing "could not retrieve" = likely bad APN
-    (
-      lowerText.includes('zoning') && 
-      lowerText.includes('overlays') && 
-      lowerText.includes('assessor') &&
-      (text.match(/could not retrieve/gi) || []).length >= 3
-    ) ||
-    // All three sections showing errors
-    (
-      lowerText.includes('zoning') && 
-      lowerText.includes('overlays') && 
-      lowerText.includes('assessor') &&
-      (text.match(/please try again/gi) || []).length >= 3
-    )
-  );
-  
-  if (isParcelError) {
-    parsed.isParcelNotFound = true;
-    // Try to extract a specific error message
-    const errorMatch = text.match(/(?:parcel.*?not found|no parcel found|could not retrieve data)[^.]*\./i);
-    if (errorMatch) {
-      parsed.errorMessage = errorMatch[0];
-    } else {
-      parsed.errorMessage = "Could not retrieve data for this APN. Please verify the number is correct.";
-    }
-  }
-
-  // Try to capture APN/AIN from anywhere
-  const ain = text.match(/\bAIN[:\s-]*([0-9]{10})\b/i)?.[1];
-  const apnRaw = text.match(/\bAPN[:\s-]*([0-9]{4}[-\s]?[0-9]{3}[-\s]?[0-9]{3})\b/i)?.[1];
-  if (ain) parsed.ain = ain;
-  if (apnRaw) parsed.apn = apnRaw.replace(/\s/g, '');
-
-  // Walk through lines, carving out sections
-  for (let i = 0; i < lines.length; i++) {
-    const kind = sectionKindFrom(lines[i]);
-    if (!kind) continue;
-
-    if (kind === 'overlays') {
-      // Check if this is grouped format
-      if (isGroupedOverlayFormat(lines, i)) {
-        const { end, data } = parseGroupedOverlays(lines, i);
-        if (data.categories.length > 0 || data.jurisdiction) {
-          parsed.groupedOverlays = data;
-        }
-        i = end - 1;
-        continue;
-      }
-    }
-
-    // Standard KV parsing for zoning, assessor, or legacy overlays
-    const data: SectionData = {};
-    let j = i + 1;
-    while (j < lines.length && sectionKindFrom(lines[j]) === null) {
-      const kv = extractKV(lines[j]);
-      if (kv) {
-        const [k, v] = kv;
-        addKV(data, k, v);
-      }
-      j++;
-    }
-
-    if (Object.keys(data).length) {
-      if (kind === 'zoning') parsed.zoning = data;
-      if (kind === 'overlays') parsed.overlays = data;
-      if (kind === 'assessor') parsed.assessor = data;
-    }
-
-    i = j - 1; // continue after the section we just consumed
-  }
-
-  // If nothing structured, keep raw
-  const hasStructured = parsed.zoning || parsed.overlays || parsed.groupedOverlays || parsed.assessor;
-  return hasStructured ? parsed : { ...parsed, raw: text };
-}
-
 /* -------------------------------- UI bits -------------------------------- */
 
 function Chip({ children }: { children: React.ReactNode }) {
@@ -327,6 +66,17 @@ function Chip({ children }: { children: React.ReactNode }) {
     <span className="inline-flex items-center rounded-full bg-white/5 border border-white/10 text-stone-300 px-2 py-0.5 text-xs font-mono font-medium">
       {children}
     </span>
+  );
+}
+
+// Plain markdown chat bubble for general Q&A replies (no parcel cards).
+function MarkdownBubble({ text }: { text: string }) {
+  return (
+    <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-stone-900 border border-white/10 text-stone-200">
+      <div className="prose prose-invert prose-sm max-w-none">
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      </div>
+    </div>
   );
 }
 
@@ -1036,273 +786,6 @@ function clearChat() {
     return lines.join('\n');
   }
 
-  function AssistantBubble({ text, index, metadata }: { text: string; index: number; metadata?: Message['metadata'] }) {
-    const parsed = useMemo(() => parseAssistantText(text), [text]);
-    const showRaw = showRawForIndex === index;
-
-    // FIX #4, #5: Extract jurisdiction for conditional viewer links
-    const jurisdiction = useMemo(() => {
-      // Try to get jurisdiction from zoning data
-      if (parsed?.zoning?.JURISDICTION) {
-        return parsed.zoning.JURISDICTION;
-      }
-      // Try from grouped overlays
-      if (parsed?.groupedOverlays?.jurisdiction) {
-        return parsed.groupedOverlays.jurisdiction;
-      }
-      // FIX #38: Try from metadata
-      if (metadata?.jurisdiction) {
-        return metadata.jurisdiction;
-      }
-      return null;
-    }, [parsed, metadata]);
-
-    // FIX #4, #5: Determine which viewer links to show
-    const showCountyViewers = shouldShowCountyViewers(jurisdiction);
-    const cityViewer = getViewerUrlForJurisdiction(jurisdiction);
-
-    // Build "copy all" text quickly (sections if present, else raw)
-    const buildCopyAll = () => {
-      const blocks: string[] = [];
-      if (parsed?.zoning) {
-        blocks.push('Zoning');
-        blocks.push(
-          ...Object.entries(parsed.zoning).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
-        );
-        blocks.push('');
-      }
-      if (parsed?.groupedOverlays) {
-        blocks.push(buildGroupedOverlaysCopyText(parsed.groupedOverlays));
-        blocks.push('');
-      } else if (parsed?.overlays) {
-        blocks.push('Overlays');
-        blocks.push(
-          ...Object.entries(parsed.overlays).map(([k, v]) => `${formatFieldLabel(k)}: ${v}`)
-        );
-        blocks.push('');
-      }
-      if (parsed?.assessor) {
-        blocks.push('Assessor');
-        blocks.push(
-          ...Object.entries(parsed.assessor).map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
-        );
-      }
-      return blocks.length ? blocks.join('\n') : (parsed?.raw ?? text);
-    };
-
-  // FIX #9: Check for parcel not found error
-  if (parsed?.isParcelNotFound) {
-    return (
-      <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
-        <ParcelNotFoundCard apn={parsed.apn} message={parsed.errorMessage} />
-      </div>
-    );
-  }
-
-  // NEW FIX: Check if this is a general Q&A response (no parcel data)
-  // If there are no structured sections AND no APN/AIN, render as simple chat bubble
-  const isGeneralQA = !parsed?.zoning && 
-                      !parsed?.overlays && 
-                      !parsed?.groupedOverlays && 
-                      !parsed?.assessor && 
-                      !parsed?.apn && 
-                      !parsed?.ain;
-
-  if (isGeneralQA) {
-    return (
-      <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-stone-900 border border-white/10 text-stone-200">
-        <div className="prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {parsed?.raw ?? text}
-          </ReactMarkdown>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
-      {/* header row: chips + viewer links + actions */}
-      <div className="flex flex-wrap gap-2 items-center">
-        {parsed?.apn && <Chip>APN: {parsed.apn}</Chip>}
-        {parsed?.ain && <Chip>AIN: {parsed.ain}</Chip>}
-
-        {/* FIX #4, #5: City-specific viewer link (e.g., ZIMAS for LA City) */}
-        {cityViewer && (
-          <a
-            href={cityViewer.url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
-            title={`Open ${cityViewer.name}`}
-          >
-            {cityViewer.name} ↗
-          </a>
-        )}
-
-        {/* FIX #41: Assessor link with validated AIN */}
-        {parsed?.ain && (
-          <a
-            href={assessorParcelUrl(parsed.ain)}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
-            title="Open Assessor Portal"
-          >
-            Assessor ↗
-          </a>
-        )}
-        
-        {/* FIX #4: Only show ZNET/GISNET for unincorporated/county parcels */}
-        {showCountyViewers && (
-          <>
-            <a
-              href={znetViewerUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
-              title="Open ZNET Viewer"
-            >
-              ZNET ↗
-            </a>
-            <a
-              href={gisnetViewerUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center rounded-full border border-amber-400/20 bg-amber-400/10 text-amber-300 hover:text-amber-200 px-2 py-0.5 text-xs font-medium"
-              title="Open GISNET"
-            >
-              GISNET ↗
-            </a>
-          </>
-        )}
-
-        {/* actions for this reply */}
-        <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            onClick={() => handleCopy('all', buildCopyAll())}
-            className={`text-xs px-3 py-1.5 rounded-md min-h-[36px] transition-colors ${
-              copiedSection === 'all' 
-                ? 'bg-green-400/10 text-green-300 border border-green-400/20' 
-                : 'bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300'
-            }`}
-            title="Copy entire response to clipboard"
-          >
-            {copiedSection === 'all' ? '✓ Copied!' : 'Copy All'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              const toExport = {
-                apn: parsed?.apn ?? null,
-                ain: parsed?.ain ?? null,
-                zoning: parsed?.zoning ?? null,
-                overlays: parsed?.overlays ?? null,
-                groupedOverlays: parsed?.groupedOverlays ?? null,
-                assessor: parsed?.assessor ?? null,
-                raw: parsed?.raw ?? text,
-                metadata: metadata ?? null,
-              };
-              downloadFile('lafires-reply.json', JSON.stringify(toExport, null, 2));
-            }}
-            className="text-xs px-3 py-1.5 rounded-md min-h-[36px] bg-white/5 hover:bg-white/10 border border-white/10 text-stone-300"
-            title="Download response as JSON file"
-          >
-            Download JSON
-          </button>
-        </div>
-      </div>
-
-      {/* FIX #38: Show query timestamp if available */}
-      {metadata?.queriedAt && (
-        <p className="text-xs text-stone-500">
-          Retrieved {new Date(metadata.queriedAt).toLocaleString()}
-        </p>
-      )}
-
-      {/* structured cards - FIX #37, #40: Pass copy state for feedback */}
-      {parsed?.zoning && (
-        <SectionCard
-          title="Zoning"
-          data={parsed.zoning}
-          sectionKey="zoning"
-          copiedSection={copiedSection}
-          onCopy={() => {
-            const block = Object.entries(parsed.zoning!)
-              .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
-              .join('\n');
-            handleCopy('zoning', `Zoning\n${block}`);
-          }}
-        />
-      )}
-      
-      {/* Render grouped overlays if present, otherwise legacy flat format */}
-      {parsed?.groupedOverlays && (
-        <GroupedOverlaysCard
-          data={parsed.groupedOverlays}
-          copiedSection={copiedSection}
-          onCopy={() => {
-            const copyText = buildGroupedOverlaysCopyText(parsed.groupedOverlays!);
-            handleCopy('overlays', copyText);
-          }}
-        />
-      )}
-      {!parsed?.groupedOverlays && parsed?.overlays && (
-        <SectionCard
-          title="Overlays"
-          data={parsed.overlays}
-          sectionKey="overlays"
-          copiedSection={copiedSection}
-          onCopy={() => {
-            const block = Object.entries(parsed.overlays!)
-              .map(([k, v]) => `${formatFieldLabel(k)}: ${v}`)
-              .join('\n');
-            handleCopy('overlays', `Overlays\n${block}`);
-          }}
-        />
-      )}
-      
-      {parsed?.assessor && (
-        <SectionCard
-          title="Assessor"
-          data={parsed.assessor}
-          sectionKey="assessor"
-          copiedSection={copiedSection}
-          onCopy={() => {
-            const block = Object.entries(parsed.assessor!)
-              .map(([k, v]) => `${formatFieldLabel(k)}: ${formatFieldValue(k, v)}`)
-              .join('\n');
-            handleCopy('assessor', `Assessor\n${block}`);
-          }}
-        />
-      )}
-
-      {/* FIX #39: More visible raw toggle button */}
-      <button
-        type="button"
-        onClick={() => setShowRawForIndex(showRaw ? null : index)}
-        aria-expanded={showRaw}
-        className="flex items-center gap-1.5 text-sm px-3 py-2 rounded-md
-                   bg-white/5 hover:bg-white/10 border border-white/10
-                   text-stone-300
-                   transition-colors min-h-[44px]"
-        title={showRaw ? 'Hide raw response' : 'Show raw response'}
-      >
-        <span>{showRaw ? '▼' : '▶'}</span>
-        <span>{showRaw ? 'Hide raw text' : 'Show raw text'}</span>
-      </button>
-
-      {showRaw && (
-        <div className="rounded-lg border border-white/10 p-3 bg-white/5">
-          <pre className="whitespace-pre-wrap text-xs">{parsed?.raw ?? text}</pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
   // Phase 1: render sections DIRECTLY from structured cards (no text parsing).
   function CardsBubble({ text, cards, index, metadata }: { text: string; cards: ParcelCards; index: number; metadata?: Message['metadata'] }) {
     const showRaw = showRawForIndex === index;
@@ -1311,16 +794,28 @@ function clearChat() {
     const a = cards.assessor;
 
     const isRenderable = (s: string) => s !== 'skipped' && s !== 'address_multiple';
-    const anySection = isRenderable(z.status) || isRenderable(o.status) || isRenderable(a.status);
+    const renderableSections = [z, o, a].filter(s => isRenderable(s.status));
+    const anySection = renderableSections.length > 0;
 
     // General Q&A (all sections skipped) or the address-picker prompt: render the
     // narrative as a plain chat bubble; the picker itself renders separately.
     if (!anySection) {
+      return <MarkdownBubble text={text} />;
+    }
+
+    // Parcel not found / total lookup failure: every requested section errored
+    // (e.g. an invalid APN). Surface the helpful recovery card, keyed off the
+    // structured card statuses rather than any text heuristic.
+    const allError = renderableSections.every(s => s.status === 'error');
+    if (allError) {
       return (
-        <div className="max-w-[92%] sm:max-w-[80%] rounded-xl p-4 shadow-md bg-stone-900 border border-white/10 text-stone-200">
-          <div className="prose prose-invert prose-sm max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-          </div>
+        <div className="w-full max-w-[92%] sm:max-w-[80%] space-y-3">
+          {text.trim() && (
+            <div className="prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            </div>
+          )}
+          <ParcelNotFoundCard apn={cards.apn} message={z.message} />
         </div>
       );
     }
@@ -1532,8 +1027,8 @@ return (
             /* Phase 1: render structured cards directly */
             <CardsBubble text={message.content} cards={message.cards} index={index} metadata={message.metadata} />
           ) : (
-            /* Legacy fallback: parse cards out of the assistant prose */
-            <AssistantBubble text={message.content} index={index} metadata={message.metadata} />
+            /* General Q&A reply (no parcel cards): plain markdown bubble */
+            <MarkdownBubble text={message.content} />
           )}
         </div>
       ))}
