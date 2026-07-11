@@ -1,23 +1,68 @@
-Los Angeles Fire Information
+LA FIRES REBUILDING KNOWLEDGE BASE (Eaton Fire / Palisades Fire, Jan 2025)
+Current as of July 2026, about 18 months after the fires.
 
-The Los Angeles Fire Department (LAFD) is responsible for fire prevention, firefighting, emergency medical care, technical rescue, hazardous materials mitigation, disaster response, public education, and community service in the city of Los Angeles.
+## REBUILDING OVERVIEW: ONE-STOP PERMIT CENTERS
 
-Important Facts:
-- The LAFD has approximately 3,400 uniformed fire personnel.
-- The department operates over 100 fire stations throughout the city.
-- LAFD responds to more than 450,000 emergency incidents annually.
-- Brush fire season typically runs from May through November, but can occur year-round due to California's climate.
+Unincorporated LA County, including Altadena (Eaton Fire): Altadena One-Stop Permit Center, 464 W Woodbury Rd, Suite 210, Altadena, CA 91001, (626) 424-6743, walk-ins Mon-Fri 8-4:30 (last intake 3pm). A second County center covers unincorporated communities hit by the Palisades Fire (e.g. Topanga): 27001 Agoura Road, Suite 250, Calabasas, CA 91302, (818) 880-4150, walk-ins Mon-Fri 7-11am. File and track County permits online via EPIC-LA.
 
-Common Fire Safety Tips:
-1. Create a defensible space around your home by clearing at least 100 feet of brush and other flammable vegetation.
-2. Have multiple ways to receive emergency notifications, including cell phones, radios, and television.
-3. Develop and practice an emergency evacuation plan with your family.
-4. Keep important documents and emergency supplies ready in case of evacuation.
-5. Be aware of red flag warnings issued by the National Weather Service.
+City of LA, including Pacific Palisades proper: Palisades Inspections and Permitting Support Center, 16925 Marquez Avenue, Pacific Palisades, CA 90272, Mon-Fri 9am-5pm, with LADBS, Engineering, Fire, Planning, and DWP staff on site. General hub: dbs.lacity.gov/homeowners and recovery.lacity.gov. Quick questions: 3-1-1. Hours can change; confirm before visiting.
 
-Fire Reporting:
-- To report a fire emergency, call 911.
-- For non-emergency fire-related inquiries, call 213-978-3800.
-- Visit lafd.org for more information and resources.
+## PERMIT PROCESS BASICS
 
-This is a sample knowledge base for demonstration purposes only. 
+Streamlined "like-for-like" rebuilding is still active as of mid-2026, under Gov. Newsom's Executive Order N-4-25 (Jan 2025) and later orders that reaffirmed/adjusted it. Orders are reissued periodically - confirm the current version at gov.ca.gov.
+
+"Like-for-like" generally means rebuilding in the same location, same use, and close to the same size. LA County allows up to a 10% increase in floor area, height, or footprint (200 sq ft in the Eaton Fire area, if greater). The City of LA allows up to 110% of prior footprint and height under the Mayor's Emergency Executive Order 1 (EO 1). Qualifying projects skip discretionary zoning review but must still meet building, fire, and health/safety code; CEQA and Coastal Act review are also suspended for them - confirm current status locally.
+
+Statewide, AB 253 (in effect since January 1, 2026) lets you hire a licensed private plan-check professional if your city or county hasn't completed a residential plan check within 30 business days.
+
+LA County also runs a Building Plan Self-Certification Pilot for unincorporated areas: a licensed CA architect/engineer with 3+ years of experience and required insurance can self-certify single-family, garage, or ADU plans, skipping full plan check (excludes geologically sensitive areas); contact selfcert@pw.lacounty.gov. The City of LA has a separate Standard Plan Pilot: pre-approved home designs usable without a full custom plan check or extra fees, for owners who owned their home by January 7, 2025.
+
+Under EO 1, streamlined-path permits must be obtained by a set cutoff (recently Jan 13, 2032), with three years after issuance to finish construction. Confirm the current deadline at planning.lacity.gov or dbs.lacity.gov.
+
+## DEBRIS REMOVAL STATUS
+
+Both federal debris phases are long finished. Phase 1 (EPA/state hazardous-materials removal) wrapped up late February 2025. Phase 2 (Army Corps ash/structural debris removal) reached substantial completion in 2025, with the last hard-to-access properties finished in early 2026. Owners who opted out used their own licensed contractor.
+
+Before a building permit, you need proof debris removal is done: a Final Sign-Off from the USACE database (government program), or a Final Fire Debris Removal Permit Closure via EPIC-LA (local/private program; or contact FireDebrisPermit@dpw.lacounty.gov). Reusing an existing foundation also needs inspection and approval from County or City Building and Safety.
+
+Soil testing isn't required by FEMA or the Army Corps after cleanup, and no agency mandates it before you rebuild. LA County Public Health and EPA have run voluntary supplemental soil sampling in some areas, but it isn't universal; you can arrange private testing at your own cost - check recovery.lacounty.gov for current programs.
+
+## KEY DEADLINES AND TIME LIMITS (as of July 2026)
+
+FEMA Individual Assistance registration closed March 31, 2025, and will not reopen for this disaster (historical only); for a documented extenuating reason you may still file a late claim via the FEMA Helpline, 1-800-621-3362. SBA disaster loan disbursement deadlines have been extended multiple times, most recently mid-2026 - confirm your current drawdown deadline with SBA (sba.gov).
+
+Rebuild permit deadlines: see streamlined-path cutoffs under Permit Process Basics above; LA County's terms are at recovery.lacounty.gov/rebuilding/like-for-like-rebuild/.
+
+Insurance ALE (additional living expense): if your home is uninhabitable from a state-declared disaster, CA law requires your insurer to cover ALE for at least 24 months, extendable to 36 months, plus a possible further 6-month extension for good cause tied to rebuilding delays outside your control. Insurers must advance at least four months of ALE. Request extensions in writing.
+
+Property tax relief has two tracks. Misfortune & Calamity reassessment: file with the LA County Assessor within 12 months of the damage date (loss over $10,000) for an immediate, temporary reduction. Keeping your old tax base when you rebuild: a "substantially equivalent" rebuild (similar size/use, generally under ~120% of pre-fire value) keeps your prior factored base-year value under Revenue and Taxation Code sections 70/70.5, instead of new-construction reassessment. The normal 5-year rebuild window is extended 3 more years (up to 8 total) for 2024-2025 LA/Ventura fire properties.
+
+Separately, Prop 19 lets disaster victims move their taxable value to a different replacement home instead of rebuilding in place - generally purchased/built within 2 years of selling the original, claimed within 3 years, with over 50% value loss on the original; the replacement can be anywhere in California. You can use the rebuild exclusion or the Prop 19 transfer, not both. Confirm thresholds at assessor.lacounty.gov or boe.ca.gov.
+
+## SB 9 AND ADUs AS REBUILD OPTIONS
+
+SB 9, the statewide lot-split/duplex law, generally still applies in unincorporated Altadena, though it has been more restricted in some Palisades fire-affected areas - check current status with your local planning department. An ADU can get its own certificate of occupancy separately from the main house, so some survivors build a smaller ADU first as interim housing while the main rebuild continues; fire-damaged properties often get priority ADU processing and reduced fees.
+
+## INSURANCE DOCUMENTATION POINTERS
+
+Keep a written, photo, or video inventory of lost belongings; CDI's free Home Inventory Guide (insurance.ca.gov) can help. If you can't itemize everything, California law lets total-loss wildfire survivors request at least 60% of their contents coverage limit upfront without a detailed list. For ALE, save every receipt for temporary housing, meals, storage, and related costs, with dates.
+
+If you can't get standard coverage, the California FAIR Plan is the state's insurer of last resort, with residential coverage up to $3 million; apply through a licensed agent/broker or call 800-339-4099.
+
+For a stuck or disputed claim, contact the CDI Consumer Hotline, 1-800-927-4357 (TTY 800-482-4833), or file a complaint at insurance.ca.gov.
+
+## OFFICIAL RESOURCES
+
+- recovery.lacounty.gov - LA County Recovers (Eaton Fire, unincorporated areas)
+- recovery.lacity.gov / emergency.lacity.gov - City of LA recovery/rebuild info (Palisades)
+- dbs.lacity.gov/homeowners - LA Building and Safety homeowner guidance
+- ca.gov/lafires - state cleanup/rebuilding progress tracker
+- insurance.ca.gov - CA Dept of Insurance wildfire/claims help, 1-800-927-4357
+- assessor.lacounty.gov - LA County Assessor tax relief, Misfortune & Calamity, Prop 19
+- disasterassistance.gov, 1-800-621-3362 - FEMA; registration closed, late-claim only
+- 211 LA - dial 2-1-1 or 211la.org for care coordination, housing, food, referrals
+
+---
+Reflects official county, city, and state sources reviewed in July 2026. Programs and deadlines change - verify current details with the relevant agency.
+
+This is general guidance, not legal advice. Verify current requirements with your local building department.
