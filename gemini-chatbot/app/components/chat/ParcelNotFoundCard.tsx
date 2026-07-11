@@ -1,5 +1,5 @@
 // FIX #9: Error card for invalid APN or data retrieval failures
-function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }) {
+function ParcelNotFoundCard({ apn, message, onRetry }: { apn?: string; message?: string; onRetry?: () => void }) {
   return (
     <div className="rounded-2xl bg-red-950/50 border border-red-500/30 text-red-300 p-4">
       <div className="flex items-start gap-3">
@@ -30,13 +30,17 @@ function ParcelNotFoundCard({ apn, message }: { apn?: string; message?: string }
             >
               Look up your APN ↗
             </a>
-            <span className="text-stone-600">|</span>
-            <button
-              onClick={() => window.location.reload()}
-              className="inline-flex items-center text-sm font-medium text-amber-300 hover:text-amber-200 hover:underline"
-            >
-              Try again
-            </button>
+            {onRetry && (
+              <>
+                <span className="text-stone-600">|</span>
+                <button
+                  onClick={onRetry}
+                  className="inline-flex items-center text-sm font-medium text-amber-300 hover:text-amber-200 hover:underline"
+                >
+                  Try again
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

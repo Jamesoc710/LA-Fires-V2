@@ -38,6 +38,7 @@ function CardsBubble({
   onToggleRaw,
   copiedSection,
   onCopy,
+  onRetry,
 }: {
   text: string;
   cards: ParcelCards;
@@ -46,6 +47,7 @@ function CardsBubble({
   onToggleRaw: () => void;
   copiedSection: CopiedSection;
   onCopy: (section: CopiedSection, text: string) => void;
+  onRetry?: () => void;
 }) {
   const z = cards.zoning;
   const o = cards.overlays;
@@ -73,7 +75,7 @@ function CardsBubble({
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
           </div>
         )}
-        <ParcelNotFoundCard apn={cards.apn} message={z.message} />
+        <ParcelNotFoundCard apn={cards.apn} message={z.message} onRetry={onRetry} />
       </div>
     );
   }

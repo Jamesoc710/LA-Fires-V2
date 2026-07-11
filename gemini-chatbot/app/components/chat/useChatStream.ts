@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AddressMatch, ChatResponse, Message, StreamFrame } from '../../types/chat';
 import { formatApnDisplay } from './formatters';
 
@@ -24,6 +24,23 @@ function greetingMessage(): Message {
 }
 
 /**
+ * Where an in-flight request is:
+ * - 'connecting': request sent, no frame received yet (server is resolving GIS)
+ * - 'streaming': first frame arrived; cards are painted, narrative may still be typing
+ * The legacy JSON fallback stays 'connecting' until the full payload lands.
+ */
+export type StreamPhase = 'idle' | 'connecting' | 'streaming';
+
+// Mirrors the server's parcel-lookup routing (APN/AIN digits or a street
+// address), so the client can guess whether cards are coming and show a
+// card skeleton instead of the generic typing dots. A wrong guess just means
+// the skeleton resolves into a plain markdown bubble.
+export function looksLikeParcelQuery(text: string): boolean {
+  if (/\b\d{4}[- ]?\d{3}[- ]?\d{3}\b/.test(text)) return true; // APN/AIN
+  return /\b\d{1,5}\s+[A-Za-z]{2,}/.test(text); // street address
+}
+
+/**
  * Owns the chat conversation state machine: message list + localStorage
  * persistence, the NDJSON stream reader, the legacy JSON fallback, the
  * address-picker flow, and the activeApn follow-up context.
@@ -40,6 +57,12 @@ export function useChatStream() {
   // Conversation memory: most recently shown parcel APN, sent as `activeApn` so
   // the server can resolve follow-ups like "what about the overlays for it?".
   const [activeApn, setActiveApn] = useState<string | null>(null);
+  const [streamPhase, setStreamPhase] = useState<StreamPhase>('idle');
+  // Retry support: the outgoing payload of the most recent request, and the id
+  // of the assistant message that request created (removed before re-sending).
+  // lastOutgoing is state (not a ref) so canRetry re-renders consumers.
+  const [lastOutgoing, setLastOutgoing] = useState<Message[] | null>(null);
+  const lastAssistantIdRef = useRef<string | null>(null);
 
   // rehydrate from localStorage on first mount
   useEffect(() => {
@@ -86,6 +109,7 @@ export function useChatStream() {
       }
       const id = newMessageId();
       assistantId = id;
+      lastAssistantIdRef.current = id;
       setMessages(prev => [...prev, { id, role: 'assistant', content: '', ...init }]);
       return id;
     };
@@ -96,6 +120,7 @@ export function useChatStream() {
     };
 
     const handleFrame = (frame: StreamFrame) => {
+      setStreamPhase('streaming'); // first frame: GIS resolved, cards en route
       if (frame.type === 'meta') {
         const am = frame.cards?.addressMatches;
         if (am && am.length > 1) setAddressMatches(am);
@@ -144,6 +169,7 @@ export function useChatStream() {
       cards: data.cards,
       metadata: data.metadata,
     };
+    lastAssistantIdRef.current = assistantMessage.id;
     setMessages(prev => [...prev, assistantMessage]);
   };
 
@@ -152,6 +178,9 @@ export function useChatStream() {
   const sendChat = async (outgoing: Message[]) => {
     setIsLoading(true);
     setError(null);
+    setStreamPhase('connecting');
+    setLastOutgoing(outgoing);
+    lastAssistantIdRef.current = null;
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -178,7 +207,19 @@ export function useChatStream() {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
+      setStreamPhase('idle');
     }
+  };
+
+  // Re-send the last request. If the failed attempt already produced an
+  // assistant bubble (e.g. cards painted, then the LLM stream died), remove
+  // it first so the retry replaces it instead of stacking a duplicate.
+  const retry = () => {
+    if (!lastOutgoing || isLoading) return;
+    setError(null);
+    const failedId = lastAssistantIdRef.current;
+    if (failedId) setMessages(prev => prev.filter(m => m.id !== failedId));
+    void sendChat(lastOutgoing);
   };
 
   // Append the user's message and send the conversation.
@@ -232,6 +273,9 @@ export function useChatStream() {
     setMessages([greetingMessage()]);
     setAddressMatches(null);
     setActiveApn(null);
+    setError(null);
+    setLastOutgoing(null);
+    lastAssistantIdRef.current = null;
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {}
@@ -243,6 +287,9 @@ export function useChatStream() {
     error,
     addressMatches,
     activeApn,
+    streamPhase,
+    canRetry: lastOutgoing !== null,
+    retry,
     sendUserMessage,
     selectAddress,
     cancelAddressPicker,
