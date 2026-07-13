@@ -264,7 +264,7 @@ export async function getParcelByAINorAPN(id: string, skipCache = false): Promis
   
   // FIX #28: Check cache first
   if (!skipCache) {
-    const cached = parcelCache.get(cacheKey);
+    const cached = await parcelCache.get(cacheKey);
     if (cached) {
       console.log("[CACHE] Parcel HIT:", cacheKey);
       return cached;
@@ -296,7 +296,7 @@ export async function getParcelByAINorAPN(id: string, skipCache = false): Promis
   
   // FIX #28: Store in cache
   if (feat) {
-    parcelCache.set(cacheKey, feat);
+    await parcelCache.set(cacheKey, feat);
   }
   
   return feat ?? null;
@@ -496,7 +496,7 @@ export async function lookupJurisdictionPoint102100(x: number, y: number): Promi
   // FIX #28: Cache by rounded coordinates (within ~10m precision)
   const cacheKey = `${Math.round(x / 10) * 10},${Math.round(y / 10) * 10}`;
   
-  const cached = jurisdictionCache.get(cacheKey);
+  const cached = await jurisdictionCache.get(cacheKey);
   if (cached) {
     console.log("[CACHE] Jurisdiction HIT:", cacheKey);
     return cached;
@@ -530,7 +530,7 @@ export async function lookupJurisdictionPoint102100(x: number, y: number): Promi
         source: "COUNTY",
         note: "No city boundary match found.",
       };
-      jurisdictionCache.set(cacheKey, result);
+      await jurisdictionCache.set(cacheKey, result);
       return result;
     }
 
@@ -544,7 +544,7 @@ export async function lookupJurisdictionPoint102100(x: number, y: number): Promi
       raw: attrs,
     };
     
-    jurisdictionCache.set(cacheKey, result);
+    await jurisdictionCache.set(cacheKey, result);
     return result;
   } catch (err: any) {
     console.error("[lookupJurisdictionPoint102100] Error:", err);
@@ -922,7 +922,7 @@ export async function lookupUniversalHazards(
   // No APN is available at this call site, so key by rounded centroid (~10m precision),
   // matching the coordinate-keying pattern used by jurisdictionCache.
   const hazardCacheKey = `hazards:${Math.round(centroid.x / 10) * 10},${Math.round(centroid.y / 10) * 10}`;
-  const cachedHazards = overlayCache.get(hazardCacheKey);
+  const cachedHazards = await overlayCache.get(hazardCacheKey);
   if (cachedHazards) {
     console.log("[CACHE] Universal Hazards HIT:", hazardCacheKey);
     return cachedHazards;
@@ -1023,7 +1023,7 @@ export async function lookupUniversalHazards(
   console.log(`[UNIVERSAL_HAZARDS_AUDIT] ${overlays.length} cards created, ${dedupedOverlays.length} after dedup`);
 
   const result = { overlays: dedupedOverlays };
-  overlayCache.set(hazardCacheKey, result);
+  await overlayCache.set(hazardCacheKey, result);
   return result;
 }
 
@@ -1165,7 +1165,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
   console.log("[ZONING] endpoint:", endpoints.gisnetParcelQuery);
 
   const { digits: zoningCacheKey } = normalizeApnVariants(id);
-  const cachedZoning = zoningCache.get(zoningCacheKey);
+  const cachedZoning = await zoningCache.get(zoningCacheKey);
   if (cachedZoning) {
     console.log("[CACHE] Zoning HIT:", zoningCacheKey);
     return cachedZoning;
@@ -1222,7 +1222,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
         links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
         method: "polygon",
       };
-      zoningCache.set(zoningCacheKey, result);
+      await zoningCache.set(zoningCacheKey, result);
       return result;
     }
   } catch (e) {
@@ -1249,7 +1249,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "envelope",
         };
-        zoningCache.set(zoningCacheKey, result);
+        await zoningCache.set(zoningCacheKey, result);
         return result;
       }
     } catch (e) {
@@ -1277,7 +1277,7 @@ export async function lookupZoning(id: string, parcelData?: any) {
           links: { znet: endpoints.znetViewer, gisnet: endpoints.gisnetViewer },
           method: "centroid",
         };
-        zoningCache.set(zoningCacheKey, result);
+        await zoningCache.set(zoningCacheKey, result);
         return result;
       }
     } catch (e) {
@@ -1303,7 +1303,7 @@ export async function lookupOverlays(
   const startTime = Date.now();
 
   const { digits: overlayCacheKey } = normalizeApnVariants(apn);
-  const cachedOverlays = overlayCache.get(overlayCacheKey);
+  const cachedOverlays = await overlayCache.get(overlayCacheKey);
   if (cachedOverlays) {
     console.log("[CACHE] Overlays HIT:", overlayCacheKey);
     return cachedOverlays;
@@ -1464,7 +1464,7 @@ export async function lookupOverlays(
     overlays: finalOverlays,
     links: { znet: endpoints.znetViewer },
   };
-  overlayCache.set(overlayCacheKey, result);
+  await overlayCache.set(overlayCacheKey, result);
   return result;
 }
 
@@ -1493,7 +1493,7 @@ function summarizeCountyOverlay(a?: Record<string, any> | null): string | undefi
 export async function lookupAssessor(id: string, parcelData?: any) {
   const { digits, dashed } = normalizeApnVariants(id);
 
-  const cachedAssessor = assessorCache.get(digits);
+  const cachedAssessor = await assessorCache.get(digits);
   if (cachedAssessor) {
     console.log("[CACHE] Assessor HIT:", digits);
     return cachedAssessor;
@@ -1588,6 +1588,6 @@ export async function lookupAssessor(id: string, parcelData?: any) {
     bathrooms: get("Bathrooms1"),
     links: { assessor: endpoints.assessorViewerForAIN((ain ?? digits).toString()) },
   };
-  assessorCache.set(digits, result);
+  await assessorCache.set(digits, result);
   return result;
 }

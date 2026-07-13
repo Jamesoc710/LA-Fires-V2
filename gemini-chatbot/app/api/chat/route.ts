@@ -6,7 +6,7 @@ import { wantsCodeContext } from "@/lib/rag/wantsCodeContext";
 import { retrieveMunicode } from "@/lib/rag/municodeIndex";
 import { runParcelLookup, buildCardSynopsis } from "@/lib/la/parcelLookup";
 import { createRequestLogger, logRequestMetrics, createTimer } from "@/lib/la/logger";
-import { checkRateLimit, getClientIdentifier, getRateLimitHeaders, RATE_LIMITS } from "@/lib/la/rateLimit";
+import { enforceRateLimit, getClientIdentifier, getRateLimitHeaders } from "@/lib/la/rateLimit";
 import type { StreamFrame } from "@/app/types/chat";
 import type { ParcelCards } from "@/lib/la/types";
 
@@ -288,7 +288,7 @@ export async function POST(request: NextRequest) {
 
   // Rate limiting check
   const clientId = getClientIdentifier(request.headers);
-  const rateCheck = checkRateLimit(clientId, RATE_LIMITS.chat.maxRequests, RATE_LIMITS.chat.windowMs);
+  const rateCheck = await enforceRateLimit(clientId);
 
   if (!rateCheck.allowed) {
     log.warn('RATELIMIT', 'Rate limit exceeded', { clientId, resetIn: rateCheck.resetIn });

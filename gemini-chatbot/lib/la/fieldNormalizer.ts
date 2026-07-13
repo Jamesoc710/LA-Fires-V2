@@ -103,6 +103,44 @@ const MALIBU_ZONE_DESCRIPTIONS: Record<string, string> = {
   RVP: "Recreational Vehicle Park", SFL: "Single-Family Low Density", SFM: "Single-Family Medium Density",
 };
 
+// Arcadia zone code -> human-readable description. Source: Arcadia Municipal
+// Code, Article IX (Development Code), Table 1-1 "Zones Implementing the
+// General Plan" and the prose zone definitions in Divisions 9102.01, .03,
+// .05, .07, and .09 (https://library.municode.com/ca/arcadia/codes/code_of_ordinances?nodeId=ARCAMUCO).
+// Keys match the live Arcadia ArcGIS Zoning layer's `Zones` field spellings
+// exactly, including its "R-O" (letter O) rendering of what the code text
+// spells "R-0", and its "R-R" (hyphenated) rendering of the code's "RR".
+const ARCADIA_ZONE_DESCRIPTIONS: Record<string, string> = {
+  'R-M': "Residential Mountainous",
+  'R-O (12,500)': "Very Low Density Residential",
+  'R-O (15,000)': "Very Low Density Residential",
+  'R-O (22,000)': "Very Low Density Residential",
+  'R-O (30,000)': "Very Low Density Residential",
+  'R-1 (7,500)': "Low Density Residential",
+  'R-1 (10,000)': "Low Density Residential",
+  'R-1 (12,500)': "Low Density Residential",
+  'R-1 (15,000)': "Low Density Residential",
+  'R-2': "Medium Density Residential",
+  'R-3': "High Density Residential",
+  'R-3-R': "Restricted High Density Residential",
+  'C-O': "Professional Office",
+  'C-G': "General Commercial",
+  'C-M': "Commercial Manufacturing",
+  'C-R': "Regional Commercial",
+  'CBD': "Commercial Business District",
+  'DMU': "Downtown Mixed Use",
+  'MU': "Mixed Use",
+  'M-1': "Industrial",
+  'SP-SA1': "Specific Plan - Santa Anita 1 (Hale Medical Center)",
+  'SP-SP': "Specific Plan - Seabiscuit Pacifica",
+  'SP-ALC': "Specific Plan - Arcadia Logistics Center",
+  'S-1': "Special Use (Santa Anita Racetrack)",
+  'PF': "Public Facilities",
+  'OS-OR': "Open Space - Outdoor Recreation",
+  'OS-RP': "Open Space - Resources Protection",
+  'R-R': "Rail Right-of-Way",
+};
+
 /* -------------------------------------------------------------------------- */
 /*                            HELPER FUNCTIONS                                */
 /* -------------------------------------------------------------------------- */
@@ -170,7 +208,7 @@ function normalizeJurisdictionName(name: string): string {
 /**
  * Detect jurisdiction type for special field handling.
  */
-type JurisdictionType = 'los_angeles' | 'pasadena' | 'malibu' | 'unincorporated' | 'other';
+type JurisdictionType = 'los_angeles' | 'pasadena' | 'malibu' | 'arcadia' | 'unincorporated' | 'other';
 
 function detectJurisdictionType(jurisdiction: string): JurisdictionType {
   const norm = normalizeJurisdictionName(jurisdiction);
@@ -183,6 +221,9 @@ function detectJurisdictionType(jurisdiction: string): JurisdictionType {
   }
   if (norm === 'malibu' || norm.includes('malibu')) {
     return 'malibu';
+  }
+  if (norm === 'arcadia' || norm.includes('arcadia')) {
+    return 'arcadia';
   }
   if (
     norm.includes('unincorporated') ||
@@ -288,6 +329,12 @@ export function normalizeZoningData(
   // known description (try exact match, then uppercase).
   if (!zoneDescription && jurisdictionType === 'malibu' && zone) {
     zoneDescription = MALIBU_ZONE_DESCRIPTIONS[zone] || MALIBU_ZONE_DESCRIPTIONS[zone.toUpperCase()] || null;
+  }
+
+  // Arcadia's ArcGIS layer has no description field; map the zone code to a
+  // known description (try exact match, then uppercase).
+  if (!zoneDescription && jurisdictionType === 'arcadia' && zone) {
+    zoneDescription = ARCADIA_ZONE_DESCRIPTIONS[zone] || ARCADIA_ZONE_DESCRIPTIONS[zone.toUpperCase()] || null;
   }
 
   // Fallback: if we still have no description, use zone code

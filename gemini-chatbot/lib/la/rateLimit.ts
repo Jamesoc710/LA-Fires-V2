@@ -1,5 +1,10 @@
 // lib/la/rateLimit.ts
 // Phase 4 Fix #30: Simple in-memory rate limiter
+// Hardening WP1: Optional Upstash-backed distributed rate limiting layered on top
+// (see enforceRateLimit); the in-memory limiter below is the absent-safe fallback.
+
+import { Ratelimit } from "@upstash/ratelimit";
+import { getRedis } from "./redis";
 
 interface RateLimitEntry {
   count: number;
@@ -96,28 +101,38 @@ function cleanupExpiredEntries(now: number): number {
 
 /**
  * Get client identifier from request headers.
- * Handles common proxy headers.
+ * Handles common proxy headers, in order of trust.
+ *
+ * Vercel sets x-vercel-forwarded-for on every request and it cannot be
+ * overwritten by a fronting proxy, so it is preferred over the other,
+ * client-spoofable headers.
  */
 export function getClientIdentifier(headers: Headers): string {
   // Try various headers in order of preference
+  const vercelForwardedFor = headers.get('x-vercel-forwarded-for');
+  if (vercelForwardedFor) {
+    // Take first IP in chain (original client)
+    return vercelForwardedFor.split(',')[0].trim();
+  }
+
+  const realIp = headers.get('x-real-ip');
+  if (realIp) {
+    return realIp.trim();
+  }
+
   const forwardedFor = headers.get('x-forwarded-for');
   if (forwardedFor) {
     // Take first IP in chain (original client)
     return forwardedFor.split(',')[0].trim();
   }
-  
-  const realIp = headers.get('x-real-ip');
-  if (realIp) {
-    return realIp.trim();
-  }
-  
+
   const cfConnectingIp = headers.get('cf-connecting-ip');
   if (cfConnectingIp) {
     return cfConnectingIp.trim();
   }
-  
-  // Fallback
-  return 'unknown';
+
+  // Fallback (local dev / direct connections without any proxy headers)
+  return 'local-dev';
 }
 
 /**
@@ -168,10 +183,75 @@ export function clearRateLimits(): void {
 export const RATE_LIMITS = {
   // Main chat endpoint - 20 requests per minute
   chat: { maxRequests: 20, windowMs: 60000 },
-  
+
   // Individual tool endpoints - 30 requests per minute
   tools: { maxRequests: 30, windowMs: 60000 },
-  
+
   // Burst protection - 5 requests per 5 seconds
   burst: { maxRequests: 5, windowMs: 5000 },
 } as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Upstash-backed distributed rate limiting (absent-safe)
+//
+// When Redis is configured, limits are enforced across all serverless instances
+// via a sliding window. With no Redis, or on any Redis/network error, we fall
+// back to the in-memory checkRateLimit above (fail open).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Module-level memo: undefined = not yet initialized, null = no Redis configured.
+let upstashLimiter: Ratelimit | null | undefined = undefined;
+
+/**
+ * Get a memoized Upstash Ratelimit instance, or null when Redis is not configured.
+ */
+function getUpstashLimiter(): Ratelimit | null {
+  if (upstashLimiter !== undefined) {
+    return upstashLimiter;
+  }
+
+  const redis = getRedis();
+  upstashLimiter = redis
+    ? new Ratelimit({
+        redis,
+        limiter: Ratelimit.slidingWindow(RATE_LIMITS.chat.maxRequests, "60 s"),
+        prefix: "lafires:rl",
+        ephemeralCache: new Map(),
+        analytics: false,
+        timeout: 1000,
+      })
+    : null;
+  return upstashLimiter;
+}
+
+/**
+ * Enforce the rate limit, preferring the shared Upstash limiter when configured.
+ *
+ * Falls back to the in-memory limiter when no Redis is configured, and fails open
+ * to it on any Redis/network error.
+ */
+export async function enforceRateLimit(
+  identifier: string,
+  max: number = RATE_LIMITS.chat.maxRequests,
+  windowMs: number = RATE_LIMITS.chat.windowMs
+): Promise<{ allowed: boolean; remaining: number; resetIn: number; total: number }> {
+  const limiter = getUpstashLimiter();
+  if (!limiter) {
+    return checkRateLimit(identifier, max, windowMs);
+  }
+
+  try {
+    // `limit()` also returns a `pending` promise for analytics flushing; we
+    // ignore it since analytics is disabled.
+    const { success, remaining, reset } = await limiter.limit(identifier);
+    return {
+      allowed: success,
+      remaining,
+      resetIn: Math.max(0, reset - Date.now()), // reset is a unix-ms timestamp
+      total: max,
+    };
+  } catch {
+    // Fail open to the in-memory limiter on any Redis/network error.
+    return checkRateLimit(identifier, max, windowMs);
+  }
+}
