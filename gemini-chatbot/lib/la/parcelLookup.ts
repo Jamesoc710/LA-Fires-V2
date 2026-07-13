@@ -157,9 +157,53 @@ export function extractAddress(s: string): string | undefined {
   return undefined;
 }
 
+// Zoning-flavored keywords: development standards, allowed uses, what can be built.
+// "rebuild"/"build"/"construct" are deliberately shared with the overlays gate
+// too — "what can I rebuild here" should surface both rebuild-critical sections.
+const ZONING_TERMS = [
+  'zoning', 'zoned?', 'zones?', 'rebuild\\w*', 'build\\w*', 'construct\\w*',
+  'setbacks?', 'height\\s*limits?', 'density', 'adu\\b', 'accessory\\s*dwelling',
+  'allowed', 'permitt?ed', 'permit(?:s|ting)?\\b', 'lot\\s*coverage', 'land\\s*use',
+  'r-?\\d',
+];
+const ZONING_REGEX = new RegExp(`\\b(?:${ZONING_TERMS.join('|')})`, 'i');
+export function wantsZoningSection(q: string): boolean {
+  return ZONING_REGEX.test(q);
+}
+
+// Overlay/hazard-flavored keywords: environmental and regulatory overlays layered
+// on top of base zoning (fire/flood/seismic hazards, coastal, historic, etc.).
+// Domain rule: never match bare "fire" — every message in this fire-rebuild app
+// mentions fires, so only qualified forms (fire zone, fire hazard, wildfire, ...)
+// count as a signal. "rebuild"/"build"/"construct" are shared with the zoning
+// gate — see note there.
+const OVERLAYS_TERMS = [
+  'overlays?', 'hazard(?:s|ous)?', 'fire\\s*(?:zone|hazard|severity|area)s?', 'fhsz',
+  'very\\s*high\\s*fire', 'wildfire', 'brush\\s*(?:zone|fire)', 'flood(?:s|ing|plain|way|\\s*zone)?',
+  'fema', 'earthquakes?', 'faults?', 'seismic', 'alquist', 'liquefaction',
+  'land\\s*slides?', 'landslides?', 'slope\\s*stab\\w*', 'tsunami', 'methane',
+  'oil\\s*(?:well|field)s?', 'coastal\\s*(?:zone|commission)?', 'sea\\s*level',
+  'airport\\s*(?:influence|noise)', 'historic\\w*', 'hpoz', 'landmark',
+  'specific\\s*plan', 'community\\s*standards', 'csd', 'environmentally\\s*sensitive',
+  'esa', 'risk[sy]?', 'dangers?', 'safe(?:ty)?', 'rebuild\\w*', 'build\\w*', 'construct\\w*',
+];
+const OVERLAYS_REGEX = new RegExp(`\\b(?:${OVERLAYS_TERMS.join('|')})`, 'i');
+export function wantsOverlaysSection(q: string): boolean {
+  return OVERLAYS_REGEX.test(q);
+}
+
+// Assessor-flavored keywords: property record data (size, age, value, use).
+const ASSESSOR_TERMS = [
+  'assessor', 'situs', 'living\\s*area', 'year\\s*built', 'units?\\b', 'bedrooms?',
+  'bathrooms?', 'use\\s*(?:type|code)\\b', 'property\\s*use', 'sq\\s*ft', 'square\\s*feet', 'assessed', 'value',
+  'valuation', 'worth', 'property\\s*tax(?:es)?', 'lot\\s*size', 'acreage',
+  'acres?', 'how\\s*(?:big|large|old)', 'built\\s*(?:in|when)?\\b',
+  'when\\s*was\\s*it\\s*built', 'improvements?', 'building\\s*size',
+];
+const ASSESSOR_REGEX = new RegExp(`\\b(?:${ASSESSOR_TERMS.join('|')})`, 'i');
 export function wantsAssessorSection(s: string) {
   const q = s.toLowerCase();
-  return /\bassessor\b|\bsitus\b|\bliving\s*area\b|\byear\s*built\b|\bunits?\b|\bbedrooms?\b|\bbathrooms?\b|\buse\b|\bsq\s*ft\b|\bsquare\s*feet\b/.test(q);
+  return ASSESSOR_REGEX.test(q);
 }
 
 /* ---------------- Grouped Overlay Formatter ---------------- */
@@ -373,22 +417,21 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger, acti
   // Determine which sections to show
   const qForIntent = lastUser.toLowerCase();
 
-  let SHOW_ZONING   = false;
-  let SHOW_OVERLAYS = false;
-  let SHOW_ASSESSOR = false;
+  // Each section gate is its own broadened keyword regex (see wantsZoningSection/
+  // wantsOverlaysSection/wantsAssessorSection above). If none of the three fire,
+  // but the message is still a generic parcel lookup (bare APN/address) or a
+  // follow-up about the active parcel with no section named, default to the
+  // rebuild-critical pair (zoning + overlays) rather than showing nothing.
+  let SHOW_ZONING   = wantsZoningSection(qForIntent);
+  let SHOW_OVERLAYS = wantsOverlaysSection(qForIntent);
+  let SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
 
-  const hasSpecificTerm = /\b(zoning|zone|overlays?|assessor)\b/i.test(qForIntent);
-
-  if (hasSpecificTerm) {
-    SHOW_ZONING = /\b(zoning|zone)\b/i.test(qForIntent);
-    SHOW_OVERLAYS = /\boverlays?\b/i.test(qForIntent);
-    SHOW_ASSESSOR = wantsAssessorSection(qForIntent);
-  } else {
-    // Default to zoning for a generic parcel lookup, or when the message refers
-    // to a previously selected parcel and we have one to reuse.
-    if (wantsParcelLookup(qForIntent) || (activeApn && refersToActiveParcel(lastUser))) {
-      SHOW_ZONING = true;
-    }
+  // Generic parcel lookup (bare APN/address) or a follow-up about the active
+  // parcel with no specific section named: default to the rebuild-critical pair.
+  if (!SHOW_ZONING && !SHOW_OVERLAYS && !SHOW_ASSESSOR &&
+      (wantsParcelLookup(qForIntent) || (activeApn && refersToActiveParcel(lastUser)))) {
+    SHOW_ZONING = true;
+    SHOW_OVERLAYS = true;
   }
 
   log.log('CHAT', 'Flags determined', { SHOW_ZONING, SHOW_OVERLAYS, SHOW_ASSESSOR });
@@ -423,13 +466,24 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger, acti
     const address = !apn ? extractAddress(lastUser) : undefined;
 
     // Active-parcel follow-up: reuse the previously selected APN when the current
-    // message names no APN/address of its own but is parcel-flavored or clearly
-    // refers to the active parcel (e.g. "what about the overlays for it?").
+    // message names no APN/address of its own but requests a data section ("what
+    // year was it built?"), is parcel-flavored, or clearly refers to the active
+    // parcel (e.g. "what about the overlays for it?").
+    const sectionRequested = SHOW_ZONING || SHOW_OVERLAYS || SHOW_ASSESSOR;
     let reusedActiveParcel = false;
     if (!apn && !address && activeApn &&
-        (PARCEL_FLAVOR_REGEX.test(lastUser) || refersToActiveParcel(lastUser))) {
+        (sectionRequested || PARCEL_FLAVOR_REGEX.test(lastUser) || refersToActiveParcel(lastUser))) {
       apn = activeApn;
       reusedActiveParcel = true;
+    }
+
+    // No parcel in play at all (no APN, no address, no active parcel to reuse):
+    // this is a general question, so suppress all section cards; the broadened
+    // keyword gates must not conjure empty no_data cards without a parcel.
+    if (!apn && !address) {
+      SHOW_ZONING = false;
+      SHOW_OVERLAYS = false;
+      SHOW_ASSESSOR = false;
     }
 
     if (wantsParcelLookup(lastUser) || reusedActiveParcel) {
