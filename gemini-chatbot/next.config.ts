@@ -36,6 +36,17 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async redirects() {
+    return [
+      {
+        source: "/",
+        destination: "/landing",
+        // `permanent: true` emits a 308 in Next.js; the audit wants a literal
+        // 301, so set the status code explicitly instead.
+        statusCode: 301,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -16,7 +16,7 @@ export default function ChatPage() {
             >
               LA Fires Assistant
             </Link>
-            <p className="text-xs text-stone-500">A project from IF Lab</p>
+            <p className="text-xs text-stone-400">A project from IF Lab</p>
           </div>
         </div>
       </header>

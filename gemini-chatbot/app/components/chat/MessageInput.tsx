@@ -44,7 +44,7 @@ function MessageInput({
           Send
         </button>
       </div>
-      <p className="mt-1 text-[11px] text-stone-500">
+      <p className="mt-1 text-[11px] text-stone-400">
         Press Enter to send • Supports APN or street address
       </p>
     </form>

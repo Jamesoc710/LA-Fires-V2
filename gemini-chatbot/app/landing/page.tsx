@@ -5,9 +5,20 @@
 // mission/trust, then technical capability, then how-to. One page serves both
 // homeowners and technical readers. Do not add claims beyond that doc.
 
+import type { Metadata } from "next";
+import { Fragment } from "react";
 import Link from "next/link";
 import { HeroChatDemo } from "./HeroChatDemo";
 import { Reveal, StatCounter } from "./Reveal";
+
+export const metadata: Metadata = {
+  title: "Zoning, Hazards & Rebuild Guidance for LA County",
+  description:
+    "Free AI assistant for LA County fire rebuilds: instant parcel zoning, hazard overlays, assessor data, and Title 26 building-code answers with citations.",
+  alternates: {
+    canonical: "/landing",
+  },
+};
 
 const STEPS = [
   {
@@ -257,7 +268,7 @@ export default function LandingPage() {
             </div>
             <video
               src="/BuildingCodeAssistantDemo.mp4"
-              poster="/demo-poster.png"
+              poster="/demo-poster.webp"
               preload="none"
               controls
               muted
@@ -295,20 +306,24 @@ export default function LandingPage() {
               </a>
             </Reveal>
           </div>
-          <dl className="mt-12">
-            {UNDER_THE_HOOD.map((item, i) => (
-              <Reveal key={item.k} delay={i * 60}>
-                <div className="grid gap-1 border-t border-stone-200 py-5 sm:grid-cols-[200px_1fr] sm:gap-8">
-                  <dt className="font-mono text-[11px] font-medium uppercase tracking-wider text-stone-500 sm:pt-1">
+          {/* dt/dd are direct children of dl (a11y: no intermediate wrapping
+              div per row) — the ruled-row look comes from a grid on the dl
+              itself, with the row border/rhythm applied to dt+dd directly so
+              each pair still reads as one bordered row. */}
+          <Reveal>
+            <dl className="mt-12 grid grid-cols-1 sm:grid-cols-[200px_1fr]">
+              {UNDER_THE_HOOD.map((item) => (
+                <Fragment key={item.k}>
+                  <dt className="mb-1 border-t border-stone-200 pt-5 font-mono text-[11px] font-medium uppercase tracking-wider text-stone-500 sm:mb-0 sm:pt-6">
                     {item.k}
                   </dt>
-                  <dd className="text-[15px] leading-relaxed text-stone-700">
+                  <dd className="pb-5 text-[15px] leading-relaxed text-stone-700 sm:border-t sm:border-stone-200 sm:pl-8 sm:pt-5">
                     {item.v}
                   </dd>
-                </div>
-              </Reveal>
-            ))}
-          </dl>
+                </Fragment>
+              ))}
+            </dl>
+          </Reveal>
         </div>
       </section>
 
@@ -347,7 +362,7 @@ export default function LandingPage() {
               </p>
             </div>
             <div className="text-xs text-stone-500">
-              <p className="mb-2 font-medium uppercase tracking-wider text-stone-400">
+              <p className="mb-2 font-medium uppercase tracking-wider text-stone-600">
                 Verify at the source
               </p>
               <ul className="space-y-1.5">
@@ -357,7 +372,7 @@ export default function LandingPage() {
                       href={v.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-amber-700 transition hover:text-amber-600"
+                      className="inline-block py-1.5 text-amber-700 transition hover:text-amber-600"
                     >
                       {v.name} ↗
                     </a>

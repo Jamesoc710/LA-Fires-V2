@@ -68,7 +68,7 @@ export function HeroChatDemo() {
         <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
         <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
         <span className="h-2.5 w-2.5 rounded-full bg-white/15" />
-        <span className="ml-3 text-xs font-medium text-stone-500">
+        <span className="ml-3 text-xs font-medium text-stone-400">
           LA Fires Assistant
         </span>
       </div>
@@ -115,7 +115,7 @@ export function HeroChatDemo() {
                   }`}
                   style={{ transitionDelay: `${200 + i * 120}ms` }}
                 >
-                  <dt className="text-[10px] uppercase tracking-wider font-medium text-stone-500">{k}</dt>
+                  <dt className="text-[10px] uppercase tracking-wider font-medium text-stone-400">{k}</dt>
                   <dd className="text-right font-mono text-stone-200">{v}</dd>
                 </div>
               ))}

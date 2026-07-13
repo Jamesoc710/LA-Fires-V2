@@ -180,7 +180,7 @@ export default function Chat() {
       <SuggestedPrompts onPick={setInput} />
 
       {/* footer toolbar */}
-      <div className="px-4 pb-2 flex items-center gap-3 text-xs text-stone-500">
+      <div className="px-4 pb-2 flex items-center gap-3 text-xs text-stone-400">
         <button
           type="button"
           onClick={clearChat}
@@ -194,12 +194,12 @@ export default function Chat() {
 
       {/* FIX #1, #2, #3: Disclaimer block */}
       <div className="px-4 pb-2 border-t border-white/10 pt-2">
-        <p className="text-xs text-stone-500 text-center leading-relaxed">
+        <p className="text-xs text-stone-400 text-center leading-relaxed">
           <span className="font-medium text-amber-300">⚠️ Data shown is for informational purposes only.</span>
           {' '}Not an official zoning determination. Some overlay types may not be included. Data may not reflect recent zone changes.
           {' '}Verify all information with the appropriate planning department before making decisions.
         </p>
-        <p className="text-xs text-stone-500 text-center mt-1 opacity-80">
+        <p className="text-xs text-stone-400 text-center mt-1">
           Contact your local planning department for official determinations.
         </p>
       </div>

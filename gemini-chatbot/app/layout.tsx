@@ -27,18 +27,30 @@ const SITE_DESCRIPTION =
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "LA Fires Assistant",
+  title: {
+    default: "LA Fires Assistant",
+    template: "%s | LA Fires Assistant",
+  },
   description: SITE_DESCRIPTION,
   openGraph: {
     title: "LA Fires Assistant",
     description: SITE_DESCRIPTION,
     type: "website",
     siteName: "LA Fires Assistant",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "LA Fires Assistant showing hazard overlay cards for an LA County parcel",
+      },
+    ],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "LA Fires Assistant",
     description: SITE_DESCRIPTION,
+    images: ["/og-image.png"],
   },
 };
 
