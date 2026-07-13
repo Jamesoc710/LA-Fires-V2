@@ -342,6 +342,9 @@ function normalizeAddressForSearch(address: string): string {
     .replace(/\bSOUTH\b/g, 'S')
     .replace(/\bEAST\b/g, 'E')
     .replace(/\bWEST\b/g, 'W')
+    // Strip LIKE/Esri wildcards: ArcGIS LIKE treats % _ (and Esri also * ? [ ]) as
+    // wildcards and ESCAPE support is unreliable; legit addresses never contain them.
+    .replace(/[%_*?\[\]]/g, ' ')
     // Collapse multiple spaces
     .replace(/\s+/g, ' ')
     .trim();
@@ -390,7 +393,8 @@ export async function searchParcelsByAddress(
   
   // If city provided, add city filter for more precise results
   if (city) {
-    const normalizedCity = city.toUpperCase().trim();
+    // Strip LIKE/Esri wildcards (% _ * ? [ ]) before escaping — see normalizeAddressForSearch.
+    const normalizedCity = city.toUpperCase().replace(/[%_*?\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
     where += ` AND UPPER(SitusCity) LIKE '%${escapeSql(normalizedCity)}%'`;
   }
 

@@ -51,6 +51,7 @@ async function callOpenRouter(
       "X-Title": "LA-Fires V2",
     },
     body: JSON.stringify({ model, messages, temperature }),
+    signal: AbortSignal.timeout(30000),
   });
 
   if (!r.ok) {
@@ -77,7 +78,7 @@ async function orWithRetryAndFallback(contents: any[], req: NextRequest, tempera
         return await callOpenRouter(model, contents, req, temperature);
       } catch (e: any) {
         const msg = String(e?.message || e);
-        const retriable = /(?:429|5\d\d|timeout|network|fetch|rate|busy)/i.test(msg);
+        const retriable = /(?:429|5\d\d|timeout|timed out|abort|network|fetch|rate|busy)/i.test(msg);
         console.warn(`[OpenRouter] attempt failed (${model} try ${i}):`, msg.slice(0, 200));
         if (!retriable || i === tries) break;
         await sleep(Math.min(6000, 600 * 2 ** (i - 1)));
@@ -118,6 +119,8 @@ async function* streamOpenRouterOnce(
       "X-Title": "LA-Fires V2",
     },
     body: JSON.stringify({ model, messages, temperature, stream: true }),
+    // Generous backstop for a true hang; long streams complete well inside this.
+    signal: AbortSignal.timeout(60000),
   });
 
   if (!r.ok) {
@@ -183,7 +186,7 @@ async function* orStreamWithRetryAndFallback(
         lastErr = e;
         if (yielded) throw e; // mid-stream failure — cards already delivered
         const msg = String(e?.message || e);
-        const retriable = /(?:429|5\d\d|timeout|network|fetch|rate|busy)/i.test(msg);
+        const retriable = /(?:429|5\d\d|timeout|timed out|abort|network|fetch|rate|busy)/i.test(msg);
         console.warn(`[OpenRouter] stream attempt failed (${model} try ${i}):`, msg.slice(0, 200));
         if (!retriable || i === tries) break;
         await sleep(Math.min(6000, 600 * 2 ** (i - 1)));
@@ -416,6 +419,8 @@ export async function POST(request: NextRequest) {
               overlayCount,
               benchmarks: log.getBenchmarks(),
               timestamp: new Date().toISOString(),
+              // streamError is set only when an LLM failure fell back to friendly copy.
+              outcome: streamError ? 'llm_fallback' : 'ok',
             });
 
             controller.close();
@@ -468,9 +473,11 @@ export async function POST(request: NextRequest) {
     // --- Step 4: LLM call ---
     const llmTimer = createTimer('llm_call');
     let text = "";
+    let llmFallback = false;
     try {
       text = await orWithRetryAndFallback(combinedPrompt, request, 0.05);
     } catch {
+      llmFallback = true;
       text = "Zoning/overlays/assessor results are below.\n\n" + friendlyFallbackMessage();
     }
     llmTimer.stopAndLog(log);
@@ -487,6 +494,7 @@ export async function POST(request: NextRequest) {
       overlayCount,
       benchmarks: log.getBenchmarks(),
       timestamp: new Date().toISOString(),
+      outcome: llmFallback ? 'llm_fallback' : 'ok',
     });
 
     // FIX #38: Include metadata in response
@@ -510,6 +518,14 @@ export async function POST(request: NextRequest) {
     );
   } catch (error: any) {
     log.error('CHAT', 'Fatal error', { error: String(error) });
+    logRequestMetrics({
+      requestId: log.getRequestId(),
+      totalTime: log.elapsed(),
+      benchmarks: log.getBenchmarks(),
+      timestamp: new Date().toISOString(),
+      outcome: 'error',
+      errorClass: error?.constructor?.name || String(error).slice(0, 100),
+    });
     return NextResponse.json(
       {
         response: friendlyFallbackMessage(),
@@ -519,7 +535,7 @@ export async function POST(request: NextRequest) {
         }
       },
       {
-        status: 200,
+        status: 500,
         headers: getRateLimitHeaders(rateCheck)
       }
     );

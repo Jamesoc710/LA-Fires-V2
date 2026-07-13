@@ -150,6 +150,8 @@ export interface RequestMetrics {
   overlayCount?: number;
   benchmarks: Record<string, number>;
   timestamp: string;
+  outcome: 'ok' | 'llm_fallback' | 'error';
+  errorClass?: string;
 }
 
 /**

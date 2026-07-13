@@ -193,7 +193,15 @@ export function useChatStream() {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // Map status to friendly copy; still throw so the existing catch/error
+        // banner/Retry flow stays unchanged.
+        const message =
+          response.status === 429
+            ? "You're sending requests too quickly - please wait a moment and try again."
+            : response.status >= 500
+              ? "The AI service is busy right now - please try again in a moment."
+              : "Something went wrong with the request - please try again.";
+        throw new Error(message);
       }
 
       const contentType = response.headers.get('content-type') || '';
