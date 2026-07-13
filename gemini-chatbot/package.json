@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "build:municode-index": "tsx scripts/build-municode-index.ts"
+    "build:municode-index": "tsx scripts/build-municode-index.ts",
+    "record-demo": "tsx scripts/record-demo/record.ts"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
@@ -27,6 +28,7 @@
     "@types/react-dom": "^19",
     "eslint": "^8.57.1",
     "eslint-config-next": "^15.3.6",
+    "playwright": "^1.61.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
     "typescript": "^5"

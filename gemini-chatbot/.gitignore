@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# demo-video capture pipeline output (raw webm, polished mp4, poster, QA frames)
+scripts/record-demo/out/
+
 # production
 /build
 

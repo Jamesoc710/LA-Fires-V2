@@ -244,8 +244,8 @@ export default function LandingPage() {
         <Reveal>
           <h2 className="text-3xl font-semibold tracking-tight">See it in action</h2>
           <p className="mx-auto mt-3 max-w-xl text-stone-600">
-            A real lookup, from question to grouped hazard cards, in under a
-            minute.
+            A real session in 40 seconds: parcel lookup, hazard cards, a
+            follow-up from memory, and a building-code answer with citations.
           </p>
         </Reveal>
         <Reveal delay={150}>
@@ -263,8 +263,8 @@ export default function LandingPage() {
               muted
               loop
               playsInline
-              width={960}
-              height={616}
+              width={1280}
+              height={800}
               className="w-full"
             />
           </div>
