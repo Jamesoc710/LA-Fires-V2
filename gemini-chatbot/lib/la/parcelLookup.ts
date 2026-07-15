@@ -568,11 +568,12 @@ export async function runParcelLookup(lastUser: string, log: RequestLogger, acti
           zoningStatus = "error";
           overlaysStatus = "error";
           assessorStatus = "error";
-          const msg = `Address search failed: ${String(e)}. Please try again or provide an APN directly.`;
+          // Generic, user-safe copy — never expose the raw error (logged below).
+          const msg = "Address search is temporarily unavailable. Please try again in a moment or enter an APN directly (e.g., 5843-004-015).";
           zoningMessage = msg;
           overlaysMessage = msg;
           assessorMessage = msg;
-          toolContext += `\n[TOOL_ERROR] ${msg}`;
+          toolContext += `\n[TOOL_ERROR] Address search failed.`;
           log.error('ADDRESS_SEARCH', 'Search failed', { error: String(e) });
         }
       }

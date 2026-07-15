@@ -1,13 +1,51 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { AddressMatch, ChatResponse, Message, StreamFrame } from '../../types/chat';
+import type { AddressMatch, ChatResponse, Message, ParcelCards, StreamFrame } from '../../types/chat';
 import { formatApnDisplay } from './formatters';
+import { useCountdown } from './useCountdown';
 
 const STORAGE_KEY = 'lafires.chat.v2';
 
 const GREETING =
   "Hi there! I'm here to help you navigate Los Angeles building codes. Enter an APN (e.g., 5843-004-015) or a street address to get started.";
+
+// Shown INSIDE the bubble (not as a banner) when the LLM fails on a general
+// question with no cards and no text — avoids a blank bubble. Calm, plain voice.
+const LLM_PAUSED_MESSAGE =
+  'AI answers are paused right now due to high demand. Please try again in a few minutes.';
+
+// Client-side retry delays (seconds). LLM-busy errors share one exhausted free-tier
+// quota, so an immediate retry is futile; 429s carry a server-provided hint.
+const LLM_RETRY_DELAY_SECONDS = 25;
+const RATE_LIMIT_DEFAULT_SECONDS = 30;
+
+const RATE_LIMIT_MESSAGE = "You're sending requests too quickly.";
+const SERVER_BUSY_MESSAGE = 'The AI service is busy right now - please try again in a moment.';
+const GENERIC_ERROR_MESSAGE = 'Something went wrong with the request - please try again.';
+
+// Mirrors CardsBubble: a section is visible unless it was skipped or is the
+// address-picker placeholder. Used to tell a card-bearing reply from a bare one.
+function hasVisibleCardSections(cards?: ParcelCards): boolean {
+  if (!cards) return false;
+  return [cards.zoning, cards.overlays, cards.assessor].some(
+    s => s.status !== 'skipped' && s.status !== 'address_multiple'
+  );
+}
+
+// Seconds to wait before retrying a 429: prefer the JSON body's `retryAfter`,
+// fall back to the Retry-After header, then a sane default.
+async function parseRetryAfterSeconds(response: Response): Promise<number> {
+  try {
+    const data = await response.clone().json();
+    if (typeof data?.retryAfter === 'number' && data.retryAfter > 0) return data.retryAfter;
+  } catch {
+    // non-JSON / empty body — fall through to the header
+  }
+  const header = Number(response.headers.get('retry-after'));
+  if (Number.isFinite(header) && header > 0) return header;
+  return RATE_LIMIT_DEFAULT_SECONDS;
+}
 
 // Stable message ids: React keys + stream frame targeting.
 export function newMessageId(): string {
@@ -63,6 +101,9 @@ export function useChatStream() {
   // lastOutgoing is state (not a ref) so canRetry re-renders consumers.
   const [lastOutgoing, setLastOutgoing] = useState<Message[] | null>(null);
   const lastAssistantIdRef = useRef<string | null>(null);
+  // Disabled-until-elapsed Retry (F1b LLM-busy + F2 rate limit share one timer).
+  const { secondsLeft: retryIn, start: startRetryCountdown, clear: clearRetryCountdown } =
+    useCountdown();
 
   // rehydrate from localStorage on first mount
   useEffect(() => {
@@ -99,6 +140,10 @@ export function useChatStream() {
     const decoder = new TextDecoder();
     let buffer = '';
     let assistantId: string | null = null;
+    // Track what actually reached the bubble so an LLM error frame can tell a
+    // card-bearing / partially-written reply from a would-be blank bubble.
+    let sawCards = false;
+    let sawDelta = false;
 
     const ensureAssistant = (init?: Partial<Message>): string => {
       if (assistantId) {
@@ -116,6 +161,7 @@ export function useChatStream() {
 
     const appendDelta = (text: string) => {
       const id = ensureAssistant();
+      sawDelta = true;
       setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: m.content + text } : m)));
     };
 
@@ -125,11 +171,22 @@ export function useChatStream() {
         const am = frame.cards?.addressMatches;
         if (am && am.length > 1) setAddressMatches(am);
         if (frame.cards?.apn) setActiveApn(frame.cards.apn);
+        if (hasVisibleCardSections(frame.cards)) sawCards = true;
         ensureAssistant({ cards: frame.cards, metadata: frame.metadata, citations: frame.citations });
       } else if (frame.type === 'delta') {
         appendDelta(frame.text);
       } else if (frame.type === 'error') {
-        setError(frame.message);
+        if (!sawCards && !sawDelta) {
+          // F1a: general question, LLM down — put calm copy INTO the bubble so it
+          // isn't blank. No banner/Retry here; the shared quota is exhausted.
+          const id = ensureAssistant();
+          setMessages(prev => prev.map(m => (m.id === id ? { ...m, content: LLM_PAUSED_MESSAGE } : m)));
+        } else {
+          // F1b: cards (or partial text) already painted — keep them, show the
+          // banner, and delay Retry so it can't re-fire into the dead quota.
+          setError(frame.message);
+          startRetryCountdown(LLM_RETRY_DELAY_SECONDS);
+        }
       }
       // 'done' is implicit at stream end
     };
@@ -179,6 +236,7 @@ export function useChatStream() {
   const sendChat = async (outgoing: Message[]) => {
     setIsLoading(true);
     setError(null);
+    clearRetryCountdown();
     setStreamPhase('connecting');
     setLastOutgoing(outgoing);
     lastAssistantIdRef.current = null;
@@ -195,13 +253,13 @@ export function useChatStream() {
       if (!response.ok) {
         // Map status to friendly copy; still throw so the existing catch/error
         // banner/Retry flow stays unchanged.
-        const message =
-          response.status === 429
-            ? "You're sending requests too quickly - please wait a moment and try again."
-            : response.status >= 500
-              ? "The AI service is busy right now - please try again in a moment."
-              : "Something went wrong with the request - please try again.";
-        throw new Error(message);
+        if (response.status === 429) {
+          // F2: honor the server's retry hint (body.retryAfter, then Retry-After
+          // header, then a default) as a live countdown that disables Retry.
+          startRetryCountdown(await parseRetryAfterSeconds(response));
+          throw new Error(RATE_LIMIT_MESSAGE);
+        }
+        throw new Error(response.status >= 500 ? SERVER_BUSY_MESSAGE : GENERIC_ERROR_MESSAGE);
       }
 
       const contentType = response.headers.get('content-type') || '';
@@ -224,7 +282,7 @@ export function useChatStream() {
   // assistant bubble (e.g. cards painted, then the LLM stream died), remove
   // it first so the retry replaces it instead of stacking a duplicate.
   const retry = () => {
-    if (!lastOutgoing || isLoading) return;
+    if (!lastOutgoing || isLoading || retryIn > 0) return;
     setError(null);
     const failedId = lastAssistantIdRef.current;
     if (failedId) setMessages(prev => prev.filter(m => m.id !== failedId));
@@ -284,6 +342,7 @@ export function useChatStream() {
     setActiveApn(null);
     setError(null);
     setLastOutgoing(null);
+    clearRetryCountdown();
     lastAssistantIdRef.current = null;
     try {
       localStorage.removeItem(STORAGE_KEY);
@@ -298,6 +357,7 @@ export function useChatStream() {
     activeApn,
     streamPhase,
     canRetry: lastOutgoing !== null,
+    retryIn,
     retry,
     sendUserMessage,
     selectAddress,

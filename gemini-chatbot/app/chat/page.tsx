@@ -16,7 +16,15 @@ export default function ChatPage() {
             >
               LA Fires Assistant
             </Link>
-            <p className="text-xs text-stone-400">A project from IF Lab</p>
+            <p className="text-xs text-stone-400">
+              A project from IF Lab at AISA ·{" "}
+              <a
+                href="mailto:rebuildlaagent@gmail.com"
+                className="underline decoration-stone-600 underline-offset-2 transition hover:text-amber-300"
+              >
+                rebuildlaagent@gmail.com
+              </a>
+            </p>
           </div>
         </div>
       </header>

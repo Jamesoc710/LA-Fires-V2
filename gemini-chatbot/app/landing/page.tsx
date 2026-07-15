@@ -353,12 +353,35 @@ export default function LandingPage() {
             <div className="max-w-md space-y-2 text-xs leading-relaxed text-stone-500">
               <p>
                 A free community tool, built independently by a solo developer
-                through the Artificial Intelligence Student Association (AISA).
+                through IF Lab at the Artificial Intelligence Student
+                Association (AISA).
+              </p>
+              <p>
+                No signup, no cookies, no tracking. The only thing recorded is
+                an anonymous daily count of lookups.
               </p>
               <p>
                 Informational only, not an official zoning determination, permit,
                 or legal advice. Always verify with your planning department
                 before making decisions.
+              </p>
+              <p>
+                Questions or corrections:{" "}
+                <a
+                  href="mailto:rebuildlaagent@gmail.com"
+                  className="inline-block py-1.5 text-amber-700 transition hover:text-amber-600"
+                >
+                  rebuildlaagent@gmail.com
+                </a>{" "}
+                ·{" "}
+                <a
+                  href="https://github.com/Jamesoc710/LA-Fires-V2/issues"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block py-1.5 text-amber-700 transition hover:text-amber-600"
+                >
+                  Report an issue ↗
+                </a>
               </p>
             </div>
             <div className="text-xs text-stone-500">

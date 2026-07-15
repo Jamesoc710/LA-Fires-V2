@@ -21,6 +21,7 @@ export default function Chat() {
     addressMatches,
     streamPhase,
     canRetry,
+    retryIn,
     retry,
     sendUserMessage,
     selectAddress,
@@ -165,10 +166,10 @@ export default function Chat() {
                 <button
                   type="button"
                   onClick={retry}
-                  disabled={isLoading}
-                  className="shrink-0 rounded-md border border-red-400/30 bg-red-400/10 px-2.5 py-1 text-xs font-medium hover:bg-red-400/20 disabled:opacity-50"
+                  disabled={isLoading || retryIn > 0}
+                  className="shrink-0 rounded-md border border-red-400/30 bg-red-400/10 px-2.5 py-1 text-xs font-medium hover:bg-red-400/20 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Retry
+                  {retryIn > 0 ? `Retry in ${retryIn}s` : 'Retry'}
                 </button>
               )}
             </div>

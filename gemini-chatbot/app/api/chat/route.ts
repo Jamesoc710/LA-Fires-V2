@@ -7,10 +7,13 @@ import { retrieveMunicode } from "@/lib/rag/municodeIndex";
 import { runParcelLookup, buildCardSynopsis } from "@/lib/la/parcelLookup";
 import { createRequestLogger, logRequestMetrics, createTimer } from "@/lib/la/logger";
 import { enforceRateLimit, getClientIdentifier, getRateLimitHeaders } from "@/lib/la/rateLimit";
+import { incrementDailyStat, statForOutcome } from "@/lib/la/stats";
 import type { StreamFrame } from "@/app/types/chat";
 import type { ParcelCards } from "@/lib/la/types";
 
 export const runtime = "nodejs";
+// Guard against a 10s platform default truncating streams when Fluid Compute is off.
+export const maxDuration = 60;
 const OR_API_KEY = process.env.OPENROUTER_API_KEY;
 
 if (!OR_API_KEY) {
@@ -313,6 +316,8 @@ export async function POST(request: NextRequest) {
 
   try {
     noStore();
+    // Anonymous aggregate counter: one per accepted (non-rate-limited) request.
+    await incrementDailyStat('chats_started');
     const { messages, activeApn } = await request.json();
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: "Invalid request. Messages must be an array." }, { status: 400 });
@@ -410,6 +415,8 @@ export async function POST(request: NextRequest) {
             try { send({ type: "done" }); } catch {}
 
             const totalTime = log.elapsed();
+            // streamError is set only when an LLM failure fell back to friendly copy.
+            const outcome = streamError ? 'llm_fallback' : 'ok';
             log.log('CHAT', 'Request complete (stream)', { totalTime, streamError });
             logRequestMetrics({
               requestId: log.getRequestId(),
@@ -419,9 +426,9 @@ export async function POST(request: NextRequest) {
               overlayCount,
               benchmarks: log.getBenchmarks(),
               timestamp: new Date().toISOString(),
-              // streamError is set only when an LLM failure fell back to friendly copy.
-              outcome: streamError ? 'llm_fallback' : 'ok',
+              outcome,
             });
+            await incrementDailyStat(statForOutcome(outcome));
 
             controller.close();
           }
@@ -484,6 +491,7 @@ export async function POST(request: NextRequest) {
 
     // FIX #31: Log metrics
     const totalTime = log.elapsed();
+    const outcome = llmFallback ? 'llm_fallback' : 'ok';
     log.log('CHAT', 'Request complete', { totalTime });
 
     logRequestMetrics({
@@ -494,8 +502,9 @@ export async function POST(request: NextRequest) {
       overlayCount,
       benchmarks: log.getBenchmarks(),
       timestamp: new Date().toISOString(),
-      outcome: llmFallback ? 'llm_fallback' : 'ok',
+      outcome,
     });
+    await incrementDailyStat(statForOutcome(outcome));
 
     // FIX #38: Include metadata in response
     return NextResponse.json(
@@ -526,6 +535,7 @@ export async function POST(request: NextRequest) {
       outcome: 'error',
       errorClass: error?.constructor?.name || String(error).slice(0, 100),
     });
+    await incrementDailyStat(statForOutcome('error'));
     return NextResponse.json(
       {
         response: friendlyFallbackMessage(),

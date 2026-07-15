@@ -3,6 +3,7 @@ import { unstable_noStore as noStore } from "next/cache";
 import { redisEnabled } from "@/lib/la/redis";
 import { getAllCacheStats } from "@/lib/la/cache";
 import { getRateLimitStats } from "@/lib/la/rateLimit";
+import { getDailyStats } from "@/lib/la/stats";
 
 export const runtime = "nodejs";
 
@@ -22,6 +23,9 @@ export async function GET(request: NextRequest) {
     body.redis = redisEnabled() ? "configured" : "memory";
     body.caches = getAllCacheStats();
     body.rateLimit = getRateLimitStats();
+    // Anonymous aggregate usage: last 7 days of each counter (null when no Redis).
+    const daily = await getDailyStats(7);
+    if (daily) body.daily = daily;
   }
 
   return NextResponse.json(body);
