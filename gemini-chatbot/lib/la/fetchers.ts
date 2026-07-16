@@ -181,7 +181,7 @@ const OVERLAY_FIELD_BLACKLIST = new Set([
  */
 const OVERLAY_FIELD_PRIORITY = [
   // Fire hazard - CRITICAL for rebuild
-  'HAZ_CLASS', 'HAZ_CODE', 'FIRE_REVIEW_DISTRICT', 'GENERALIZE',
+  'HAZ_CLASS', 'FHSZ_Description', 'FHSZ_Descr', 'FHSZ', 'HAZ_CODE', 'FIRE_REVIEW_DISTRICT', 'GENERALIZE',
   
   // Names and labels - primary identifiers
   'NAME', 'TITLE', 'LABEL', 'DISTRICT', 
@@ -809,8 +809,9 @@ export async function lookupCityOverlays(
     // Very High Fire Hazard
     if (lowerLabel.includes("very high fire hazard") || lowerLabel.includes("very_high_fire")) {
       let details: string | undefined = undefined;
-      if (rawFeat.HAZ_CLASS && rawFeat.HAZ_CLASS !== "Very High") {
-        details = rawFeat.HAZ_CLASS;
+      const vhClass = rawFeat.HAZ_CLASS || rawFeat.FHSZ_Description || rawFeat.FHSZ_Descr;
+      if (vhClass && vhClass !== "Very High") {
+        details = vhClass;
       } else if (rawFeat.GENERALIZE && !rawFeat.GENERALIZE.toLowerCase().includes('parcel')) {
         details = rawFeat.GENERALIZE;
       }
@@ -872,8 +873,28 @@ export async function lookupCityOverlays(
 
     // Fire Hazard
     if (lowerLabel.includes("fire") || lowerLabel.includes("hazard")) {
-      const hazClass = rawFeat.HAZ_CLASS || rawFeat.FIRE_REVIEW_DISTRICT;
-      return { ...base, program: "Other", name: hazClass ? `Fire Hazard: ${hazClass}` : (summary || "Fire Hazard Area"), details: rawFeat.FIRE_REVIEW_DISTRICT || undefined };
+      // Resolve class across county (HAZ_CLASS) and statewide CAL FIRE (FHSZ_*) schemas.
+      const fhszMap: Record<number, string> = { 1: "Moderate", 2: "High", 3: "Very High", [-2]: "NonWildland", [-3]: "NonWildland" };
+      const fhszCoded = rawFeat.FHSZ != null && rawFeat.FHSZ !== "" ? fhszMap[Number(rawFeat.FHSZ)] : undefined;
+      const hazClass = rawFeat.HAZ_CLASS || rawFeat.FHSZ_Description || rawFeat.FHSZ_Descr || fhszCoded || rawFeat.FIRE_REVIEW_DISTRICT;
+      const isNonWildland = typeof hazClass === "string" && /^non[-\s]?wildland$/i.test(hazClass);
+      const name = isNonWildland
+        ? "Not in a mapped Fire Hazard Severity Zone"
+        : hazClass ? `Fire Hazard: ${hazClass}` : (summary || "Fire Hazard Area");
+
+      // Vintage note keyed off the overlay label, appended to any existing details.
+      let details: string | undefined = rawFeat.FIRE_REVIEW_DISTRICT || undefined;
+      let vintage: string | undefined;
+      if (label.includes("CAL FIRE 2025")) {
+        vintage = "CAL FIRE statewide map dated Mar 24, 2025. LRA zones shown as recommended by CAL FIRE; confirm adoption status with your local building department.";
+      } else if (label.includes("SRA, CAL FIRE 2024")) {
+        vintage = "CAL FIRE State Responsibility Area map, effective Apr 1, 2024.";
+      } else if (label.includes("Parcel Fire Severity")) {
+        vintage = "City of Pasadena parcel-level fire severity (updated 2025).";
+      }
+      if (vintage) details = details ? `${details} — ${vintage}` : vintage;
+
+      return { ...base, program: "Other", name, details };
     }
 
     // Specific Plan Areas
@@ -1403,10 +1424,15 @@ export async function lookupOverlays(
         if (attrs.Type) {
           details = attrs.Type;
         } else if (attrs.HAZ_CLASS) {
-          details = `Fire Hazard Class: ${attrs.HAZ_CLASS}`;
-          name = attrs.HAZ_CLASS === "Very High"
+          // HAZ_CLASS is unique to the county fire-hazard layer among county overlays,
+          // so this branch fires only for that layer.
+          const isNonWildland = /^non[-\s]?wildland$/i.test(String(attrs.HAZ_CLASS));
+          name = isNonWildland
+            ? "Not in a mapped Fire Hazard Severity Zone"
+            : attrs.HAZ_CLASS === "Very High"
             ? "Very High Fire Hazard Severity Zone"
             : `Fire Hazard Zone: ${attrs.HAZ_CLASS}`;
+          details = `Fire Hazard Class: ${attrs.HAZ_CLASS} — LA County adopted FHSZ maps: CAL FIRE LRA map dated Mar 24, 2025; SRA effective Apr 1, 2024.`;
           program = "Other";
         } else if (attrs.STATUS?.includes("Hillside")) {
           name = attrs.STATUS;
