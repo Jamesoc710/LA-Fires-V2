@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "build:municode-index": "tsx scripts/build-municode-index.ts",
+    "audit:fhsz": "tsx scripts/audit-fhsz.ts",
     "record-demo": "tsx scripts/record-demo/record.ts"
   },
   "dependencies": {
